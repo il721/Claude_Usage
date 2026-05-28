@@ -1,0 +1,9 @@
+{
+  "name": "com.claude.widget",
+  "description": "Claude Usage Widget Bridge",
+  "path": "F:\\____IL_CPP\\Claude_Usage\\native_host\\host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://knihebkbljomhhgbbapobpedfjgkmihd/"
+  ]
+}
