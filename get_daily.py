@@ -17,6 +17,7 @@ def main():
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     daily  = defaultdict(lambda: [0, 0, 0, 0])
     models = defaultdict(int)
+    seen   = set()  # message ids already counted (Claude Code duplicates them on resume)
 
     for jf in projects_dir.glob('**/*.jsonl'):
         try:
@@ -33,6 +34,13 @@ def main():
                         usage = msg.get('usage') or {}
                         if not usage:
                             continue
+                        # Skip duplicate messages (same id appears across resumed
+                        # sessions / copied history) to avoid double-counting tokens.
+                        mid = msg.get('id')
+                        if mid:
+                            if mid in seen:
+                                continue
+                            seen.add(mid)
                         ts = obj.get('timestamp', '')
                         if not ts:
                             continue

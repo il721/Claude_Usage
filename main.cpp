@@ -714,6 +714,11 @@ static void draw_model_chart(HDC hdc, int y0) {
             int sy = cy + (int)(DONUT_R_OUT * std::sin(angle)   + 0.5);
             int ex = cx + (int)(DONUT_R_OUT * std::cos(end_ang) + 0.5);
             int ey = cy + (int)(DONUT_R_OUT * std::sin(end_ang) + 0.5);
+            // Sub-pixel slice: if both radial endpoints round to the same point,
+            // GDI Pie() draws the ENTIRE ellipse (painting the whole donut this
+            // slice's color). Skip the draw but keep advancing the angle so the
+            // remaining slices stay proportional.
+            if (sx == ex && sy == ey) { angle = end_ang; continue; }
             HBRUSH br  = CreateSolidBrush(C_MODEL[i % 6]);
             HPEN   pen = CreatePen(PS_SOLID, 2, C_BG);
             HBRUSH ob  = (HBRUSH)SelectObject(hdc, br);

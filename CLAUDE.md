@@ -15,6 +15,7 @@ Use `/pack` to rebuild `Claude_Usage_Widget.zip`.
 Whenever you successfully edit any of these files:
 - `main.cpp`
 - `get_limits.py`
+- `get_daily.py`
 - `extension/background.js`
 - `extension/content.js`
 - `extension/manifest.json`
