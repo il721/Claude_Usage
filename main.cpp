@@ -864,7 +864,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         g_hwnd = hw;
         SetWindowRgn(hw, CreateRoundRectRgn(0, 0, WW, WH, 16, 16), FALSE);
         apply_opacity(hw);
-        SetTimer(hw, 1, 60000, nullptr);
+        SetTimer(hw, 1, 180000, nullptr);
         start_load();
         return 0;
 

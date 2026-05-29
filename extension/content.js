@@ -1,5 +1,5 @@
 // Fetches Claude.ai session/weekly usage and sends to native host every 5 min.
-const INTERVAL_MS = 5 * 60 * 1000;
+const INTERVAL_MS = 3 * 60 * 1000;
 let cachedOrgId = null;
 
 async function fetchOrgId() {
