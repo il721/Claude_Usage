@@ -207,22 +207,6 @@ static double to_double(const std::string& s) {
     try { return std::stod(s); } catch (...) { return 0.0; }
 }
 
-static std::string jfield(const std::string& js, const char* key) {
-    std::string k = "\""; k += key; k += "\"";
-    auto p = js.find(k);
-    if (p == std::string::npos) return {};
-    p = js.find(':', p + k.size());
-    if (p == std::string::npos) return {};
-    p = js.find_first_not_of(" \t\r\n", p + 1);
-    if (p == std::string::npos) return {};
-    if (js[p] == '"') {
-        auto e = js.find('"', p + 1);
-        return e == std::string::npos ? "" : js.substr(p + 1, e - p - 1);
-    }
-    auto e = js.find_first_of(",}\r\n", p);
-    return trim(js.substr(p, e == std::string::npos ? std::string::npos : e - p));
-}
-
 // ─── Bounded pipe read ─────────────────────────────────────────────────────────
 // Reads a child's stdout with a hard deadline. The old code looped on a blocking
 // ReadFile and only applied a WaitForSingleObject timeout *after* the loop — so a
@@ -552,10 +536,14 @@ static void fillr(HDC hdc, int x, int y, int w, int h, COLORREF c) {
     DeleteObject(b);
 }
 
-static void drawbar(HDC hdc, int x, int y, int w, double frac, bool warn = false) {
-    fillr(hdc, x, y, w, BAR_H, C_BAR_BG);
-    int fw = static_cast<int>(w * std::clamp(frac, 0.0, 1.0));
-    if (fw > 0) fillr(hdc, x, y, fw, BAR_H, warn ? C_WARN : C_BAR_FG);
+// frac is set at runtime from loaded usage data (g_m.row1_frac / row2_frac); the
+// data-flow inspection can't see that cross-thread global write and wrongly thinks
+// it's always the default 0.0.
+// ReSharper disable once CppDFAConstantParameter
+static void drawbar(HDC hdc, int y, double frac, bool warn = false) {
+    fillr(hdc, PAD, y, BAR_W, BAR_H, C_BAR_BG);
+    int fw = static_cast<int>(BAR_W * std::clamp(frac, 0.0, 1.0));
+    if (fw > 0) fillr(hdc, PAD, y, fw, BAR_H, warn ? C_WARN : C_BAR_FG);
 }
 
 static HFONT makefont(int sz) {
@@ -601,7 +589,7 @@ static void paint(HWND hw) {
     put(hdc, m.row1_label.c_str(), PAD, y, C_TEXT);
     y += 20;
 
-    drawbar(hdc, PAD, y + 1, BAR_W, m.row1_frac);
+    drawbar(hdc, y + 1, m.row1_frac);
     put(hdc, m.row1_right.c_str(), PAD + BAR_W + 8, y, C_TEXT);
     y += BAR_H + 6;
 
@@ -615,7 +603,7 @@ static void paint(HWND hw) {
     y += 20;
 
     bool over = m.row2_frac >= 1.0;
-    drawbar(hdc, PAD, y + 1, BAR_W, m.row2_frac, over);
+    drawbar(hdc, y + 1, m.row2_frac, over);
     put(hdc, m.row2_right.c_str(), PAD + BAR_W + 8, y, over ? C_WARN : C_TEXT);
     y += BAR_H + 6;
 
@@ -699,8 +687,8 @@ static void draw_model_chart(HDC hdc, int y0) {
     if (n == 1) {
         HBRUSH br  = CreateSolidBrush(C_MODEL[0]);
         HPEN   pen = CreatePen(PS_SOLID, 1, C_BG);
-        HBRUSH ob  = (HBRUSH)SelectObject(hdc, br);
-        HPEN   op  = (HPEN)SelectObject(hdc, pen);
+        auto   ob  = static_cast<HBRUSH>(SelectObject(hdc, br));
+        auto   op  = static_cast<HPEN>(SelectObject(hdc, pen));
         Ellipse(hdc, x1, y1, x2, y2);
         SelectObject(hdc, ob); SelectObject(hdc, op);
         DeleteObject(br); DeleteObject(pen);
@@ -708,12 +696,12 @@ static void draw_model_chart(HDC hdc, int y0) {
         static constexpr double PI = 3.14159265358979323846;
         double angle = -PI / 2.0;
         for (int i = 0; i < n; ++i) {
-            double sweep    = (double)g_models[i].total / total * 2.0 * PI;
+            double sweep    = static_cast<double>(g_models[i].total) / static_cast<double>(total) * 2.0 * PI;
             double end_ang  = angle + sweep;
-            int sx = cx + (int)(DONUT_R_OUT * std::cos(angle)   + 0.5);
-            int sy = cy + (int)(DONUT_R_OUT * std::sin(angle)   + 0.5);
-            int ex = cx + (int)(DONUT_R_OUT * std::cos(end_ang) + 0.5);
-            int ey = cy + (int)(DONUT_R_OUT * std::sin(end_ang) + 0.5);
+            int sx = cx + static_cast<int>(std::lround(DONUT_R_OUT * std::cos(angle)));
+            int sy = cy + static_cast<int>(std::lround(DONUT_R_OUT * std::sin(angle)));
+            int ex = cx + static_cast<int>(std::lround(DONUT_R_OUT * std::cos(end_ang)));
+            int ey = cy + static_cast<int>(std::lround(DONUT_R_OUT * std::sin(end_ang)));
             // Sub-pixel slice: if both radial endpoints round to the same point,
             // GDI Pie() draws the ENTIRE ellipse (painting the whole donut this
             // slice's color). Skip the draw but keep advancing the angle so the
@@ -721,8 +709,8 @@ static void draw_model_chart(HDC hdc, int y0) {
             if (sx == ex && sy == ey) { angle = end_ang; continue; }
             HBRUSH br  = CreateSolidBrush(C_MODEL[i % 6]);
             HPEN   pen = CreatePen(PS_SOLID, 2, C_BG);
-            HBRUSH ob  = (HBRUSH)SelectObject(hdc, br);
-            HPEN   op  = (HPEN)SelectObject(hdc, pen);
+            auto   ob  = static_cast<HBRUSH>(SelectObject(hdc, br));
+            auto   op  = static_cast<HPEN>(SelectObject(hdc, pen));
             Pie(hdc, x1, y1, x2, y2, sx, sy, ex, ey);
             SelectObject(hdc, ob); SelectObject(hdc, op);
             DeleteObject(br); DeleteObject(pen);
@@ -736,8 +724,8 @@ static void draw_model_chart(HDC hdc, int y0) {
     {
         HBRUSH br  = CreateSolidBrush(C_BG);
         HPEN   pen = CreatePen(PS_SOLID, 1, C_BG);
-        HBRUSH ob  = (HBRUSH)SelectObject(hdc, br);
-        HPEN   op  = (HPEN)SelectObject(hdc, pen);
+        auto   ob  = static_cast<HBRUSH>(SelectObject(hdc, br));
+        auto   op  = static_cast<HPEN>(SelectObject(hdc, pen));
         Ellipse(hdc, cx-DONUT_R_IN, cy-DONUT_R_IN, cx+DONUT_R_IN, cy+DONUT_R_IN);
         SelectObject(hdc, ob); SelectObject(hdc, op);
         DeleteObject(br); DeleteObject(pen);
@@ -898,7 +886,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         g_hwnd = hw;
         SetWindowRgn(hw, CreateRoundRectRgn(0, 0, WW, WH, 16, 16), FALSE);
         apply_opacity(hw);
-        SetTimer(hw, 1, 180000, nullptr);
+        SetTimer(hw, 1, 60000, nullptr);   // auto-refresh every 1 minute
         start_load();
         return 0;
 
@@ -972,7 +960,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         } else {
             SetBkMode(dc, TRANSPARENT);
             HFONT f    = makefont(14);
-            HFONT prev = static_cast<HFONT>(SelectObject(dc, f));
+            auto  prev = static_cast<HFONT>(SelectObject(dc, f));
             if (chk) {
                 SetTextColor(dc, sel ? C_TEXT : C_BAR_FG);
                 RECT cr{ rc.left + 2, rc.top, rc.left + 20, rc.bottom };

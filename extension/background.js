@@ -7,7 +7,7 @@
 // claude.ai tab to fetch fresh usage *in the page context* (first-party cookies).
 
 const ALARM      = 'poll-usage';
-const PERIOD_MIN = 3;   // chrome.alarms minimum granularity is 1 minute
+const PERIOD_MIN = 1;   // chrome.alarms minimum granularity is 1 minute
 
 // Idempotent — safe to call on every service-worker wake-up.
 chrome.alarms.create(ALARM, { periodInMinutes: PERIOD_MIN });

@@ -2,7 +2,7 @@
 // Polling is primarily driven by the service-worker alarm (FETCH_NOW message),
 // which keeps working even when this tab is backgrounded and page timers are
 // throttled. The setInterval below is only a best-effort fallback.
-const INTERVAL_MS = 3 * 60 * 1000;
+const INTERVAL_MS = 1 * 60 * 1000;
 let cachedOrgId = null;
 
 async function fetchOrgId() {
