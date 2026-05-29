@@ -18,6 +18,20 @@ constexpr COLORREF C_WARN   = RGB(194, 60,  44);    // over-limit red
 constexpr COLORREF C_TEXT   = RGB(230, 230, 230);   // text primary
 constexpr COLORREF C_DIM    = RGB(150, 150, 150);   // text secondary
 
+// ─── Owner-drawn menu items ───────────────────────────────────────────────────
+struct OdItem { const wchar_t* label; bool has_arrow; };
+static OdItem g_od[16];
+static int    g_od_n;
+static OdItem* od(const wchar_t* lbl, bool arr = false) {
+    g_od[g_od_n] = { lbl, arr }; return &g_od[g_od_n++];
+}
+
+// ─── Info window ─────────────────────────────────────────────────────────────
+struct Line { std::wstring text; COLORREF col; bool small; bool spacer; };
+static std::vector<Line> g_ilines;
+static HWND g_info   = nullptr;
+static int  g_info_h = 0;
+
 constexpr int WW = 430, WH = 150;
 constexpr int PAD = 14, BAR_H = 16, TEXT_W = 90;
 constexpr int BAR_W = WW - PAD * 2 - TEXT_W - 8;
@@ -169,6 +183,22 @@ static std::vector<std::string> split_pipe(const std::string& s) {
 
 static double to_double(const std::string& s) {
     try { return std::stod(s); } catch (...) { return 0.0; }
+}
+
+static std::string jfield(const std::string& js, const char* key) {
+    std::string k = "\""; k += key; k += "\"";
+    auto p = js.find(k);
+    if (p == std::string::npos) return {};
+    p = js.find(':', p + k.size());
+    if (p == std::string::npos) return {};
+    p = js.find_first_not_of(" \t\r\n", p + 1);
+    if (p == std::string::npos) return {};
+    if (js[p] == '"') {
+        auto e = js.find('"', p + 1);
+        return e == std::string::npos ? "" : js.substr(p + 1, e - p - 1);
+    }
+    auto e = js.find_first_of(",}\r\n", p);
+    return trim(js.substr(p, e == std::string::npos ? std::string::npos : e - p));
 }
 
 // ─── Subprocess: write .ps1 to temp dir, run, capture stdout ─────────────────
@@ -546,6 +576,139 @@ static void paint(HWND hw) {
     EndPaint(hw, &ps);
 }
 
+// ─── Info window ─────────────────────────────────────────────────────────────
+static constexpr int IW = WW, LH = 20, SH = 8;
+
+static void build_info_lines() {
+    g_ilines.clear();
+    auto add = [](std::wstring t, COLORREF c = C_TEXT, bool sm = false) {
+        g_ilines.push_back({ std::move(t), c, sm, false });
+    };
+    auto gap = []() { g_ilines.push_back({ {}, 0, false, true }); };
+
+    wchar_t prof[MAX_PATH]{};
+    GetEnvironmentVariableW(L"USERPROFILE", prof, MAX_PATH);
+    auto fpath = std::filesystem::path(std::wstring(prof)) / L".claude" / L"widget_limits.json";
+
+    add(L"widget_limits.json");
+    gap();
+
+    WIN32_FILE_ATTRIBUTE_DATA fa{};
+    if (!GetFileAttributesExW(fpath.c_str(), GetFileExInfoStandard, &fa)) {
+        add(L"File not found  (no extension data yet)", C_WARN);
+    } else {
+        SYSTEMTIME now_st{}; GetSystemTime(&now_st);
+        FILETIME   now_ft{}; SystemTimeToFileTime(&now_st, &now_ft);
+        ULARGE_INTEGER un, um;
+        un.LowPart = now_ft.dwLowDateTime;          un.HighPart = now_ft.dwHighDateTime;
+        um.LowPart = fa.ftLastWriteTime.dwLowDateTime; um.HighPart = fa.ftLastWriteTime.dwHighDateTime;
+        LONGLONG age = static_cast<LONGLONG>(un.QuadPart - um.QuadPart) / 10000000LL;
+        wchar_t buf[64];
+        if      (age < 60)   swprintf(buf, 64, L"Updated %llds ago", age);
+        else if (age < 3600) swprintf(buf, 64, L"Updated %lldm ago", age / 60);
+        else                 swprintf(buf, 64, L"Updated %lldh ago", age / 3600);
+        add(buf, C_DIM, true);
+
+        std::ifstream jf(fpath);
+        if (!jf) {
+            gap(); add(L"Cannot read file", C_WARN);
+        } else {
+            std::string js((std::istreambuf_iterator<char>(jf)), {});
+
+            auto parse_block = [&](const char* bkey) {
+                auto pos = js.find(std::string("\"") + bkey + "\"");
+                if (pos == std::string::npos) { add(L"  No data", C_DIM, true); return; }
+                auto end = js.find('}', pos);
+                std::string blk = end != std::string::npos ? js.substr(pos, end - pos + 1) : js.substr(pos);
+                std::string util   = jfield(blk, "utilization");
+                std::string resets = jfield(blk, "resets_at");
+                wchar_t b[128];
+                swprintf(b, 128, L"  Utilization    %hs%%", util.empty() ? "?" : util.c_str());
+                add(b, C_TEXT, true);
+                if (!resets.empty()) {
+                    SYSTEMTIME st{};
+                    std::wstring rs = parse_iso(resets, st) ? fmt_local_time(st) : to_wstr(resets);
+                    add(L"  Resets at       " + rs, C_TEXT, true);
+                }
+            };
+
+            gap(); add(L"Five-hour session", C_BAR_FG, true); parse_block("five_hour");
+            gap(); add(L"Seven-day week",    C_BAR_FG, true); parse_block("seven_day");
+
+            std::string ep = jfield(js, "_endpoint");
+            std::string ts = jfield(js, "_ts");
+            if (!ep.empty() || !ts.empty()) {
+                gap(); add(L"Source", C_BAR_FG, true);
+                if (!ep.empty()) {
+                    auto op2 = ep.find("/organizations/");
+                    if (op2 != std::string::npos) {
+                        auto ue = ep.find('/', op2 + 15);
+                        if (ue != std::string::npos) ep = ep.substr(0, op2 + 15) + "..." + ep.substr(ue);
+                    }
+                    add(L"  Endpoint    " + to_wstr(ep), C_TEXT, true);
+                }
+                if (!ts.empty()) {
+                    try {
+                        ULARGE_INTEGER u;
+                        u.QuadPart = static_cast<ULONGLONG>((std::stoll(ts) + 11644473600000LL) * 10000LL);
+                        FILETIME ft; ft.dwLowDateTime = u.LowPart; ft.dwHighDateTime = u.HighPart;
+                        SYSTEMTIME st{}, loc{};
+                        FileTimeToSystemTime(&ft, &st);
+                        SystemTimeToTzSpecificLocalTime(nullptr, &st, &loc);
+                        wchar_t b[64];
+                        swprintf(b, 64, L"  Fetched      %d-%02d-%02d  %d:%02d:%02d",
+                            loc.wYear, loc.wMonth, loc.wDay, loc.wHour, loc.wMinute, loc.wSecond);
+                        add(b, C_TEXT, true);
+                    } catch (...) {}
+                }
+            }
+        }
+    }
+
+    gap(); add(L"Click anywhere or Esc to close", C_DIM, true);
+
+    int h = PAD * 2;
+    for (auto& l : g_ilines) h += l.spacer ? SH : LH;
+    g_info_h = h;
+}
+
+LRESULT CALLBACK InfoWndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE:
+        SetWindowRgn(hw, CreateRoundRectRgn(0, 0, IW, g_info_h, 16, 16), FALSE);
+        SetLayeredWindowAttributes(hw, 0, g_opacity, LWA_ALPHA);
+        return 0;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hw, &ps);
+        fillr(hdc, 0, 0, IW, g_info_h, C_BG);
+        HFONT fn = makefont(14), fs = makefont(12);
+        int y = PAD;
+        for (auto& l : g_ilines) {
+            if (l.spacer) { y += SH; continue; }
+            SelectObject(hdc, l.small ? fs : fn);
+            put(hdc, l.text.c_str(), PAD, y, l.col);
+            y += LH;
+        }
+        DeleteObject(fn); DeleteObject(fs);
+        EndPaint(hw, &ps);
+        return 0;
+    }
+    case WM_LBUTTONUP:
+    case WM_RBUTTONUP:
+        DestroyWindow(hw);
+        return 0;
+    case WM_KEYDOWN:
+        if (wp == VK_ESCAPE) DestroyWindow(hw);
+        return 0;
+    case WM_DESTROY:
+        g_info = nullptr;
+        return 0;
+    default:
+        return DefWindowProcW(hw, msg, wp, lp);
+    }
+}
+
 // ─── Window procedure ─────────────────────────────────────────────────────────
 LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -591,34 +754,98 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         g_dragging = false;
         return 0;
 
+    case WM_MEASUREITEM: {
+        auto* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
+        if (mis->CtlType != ODT_MENU) return DefWindowProcW(hw, msg, wp, lp);
+        auto* it = reinterpret_cast<OdItem*>(mis->itemData);
+        mis->itemHeight = (it && it->label) ? 26 : 8;
+        mis->itemWidth  = 160;
+        return TRUE;
+    }
+
+    case WM_DRAWITEM: {
+        auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
+        if (dis->CtlType != ODT_MENU) return DefWindowProcW(hw, msg, wp, lp);
+        auto* it  = reinterpret_cast<OdItem*>(dis->itemData);
+        HDC   dc  = dis->hDC;
+        RECT  rc  = dis->rcItem;
+        bool  sel = (dis->itemState & ODS_SELECTED) != 0;
+        bool  chk = (dis->itemState & ODS_CHECKED)  != 0;
+
+        fillr(dc, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
+              sel ? C_BAR_BG : C_BG);
+
+        if (!it || !it->label) {
+            HPEN pen = CreatePen(PS_SOLID, 1, C_BAR_BG);
+            HPEN old = static_cast<HPEN>(SelectObject(dc, pen));
+            int  y   = (rc.top + rc.bottom) / 2;
+            MoveToEx(dc, rc.left + 8, y, nullptr);
+            LineTo(dc, rc.right - 8, y);
+            SelectObject(dc, old); DeleteObject(pen);
+        } else {
+            SetBkMode(dc, TRANSPARENT);
+            HFONT f    = makefont(14);
+            HFONT prev = static_cast<HFONT>(SelectObject(dc, f));
+            if (chk) {
+                SetTextColor(dc, sel ? C_TEXT : C_BAR_FG);
+                RECT cr{ rc.left + 2, rc.top, rc.left + 20, rc.bottom };
+                DrawTextW(dc, L"\u2713", 1, &cr, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+            }
+            SetTextColor(dc, C_TEXT);
+            RECT tr{ rc.left + 22, rc.top, it->has_arrow ? rc.right - 18 : rc.right - 4, rc.bottom };
+            DrawTextW(dc, it->label, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+            if (it->has_arrow) {
+                SetTextColor(dc, sel ? C_TEXT : C_DIM);
+                RECT ar{ rc.right - 18, rc.top, rc.right - 2, rc.bottom };
+                DrawTextW(dc, L"\u25BA", 1, &ar, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+            }
+            SelectObject(dc, prev); DeleteObject(f);
+        }
+        return TRUE;
+    }
+
     case WM_RBUTTONUP: {
         POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         ClientToScreen(hw, &pt);
 
-        // Opacity submenu (command IDs 100…105 → 25%…100%)
-        HMENU op = CreatePopupMenu();
+        g_od_n = 0;
         const struct { const wchar_t* label; BYTE alpha; } levels[] = {
-            { L"25%",  64  },
-            { L"50%",  128 },
-            { L"75%",  191 },
-            { L"90%",  230 },
-            { L"100%", 255 },
+            { L"25%", 64 }, { L"50%", 128 }, { L"75%", 191 }, { L"90%", 230 }, { L"100%", 255 },
         };
+
+        HMENU op = CreatePopupMenu();
         for (int i = 0; i < 5; ++i) {
-            UINT flags = MF_STRING;
+            UINT flags = MF_OWNERDRAW;
             if (g_opacity == levels[i].alpha) flags |= MF_CHECKED;
-            AppendMenuW(op, flags, 100 + i, levels[i].label);
+            AppendMenuW(op, flags, 100 + i, reinterpret_cast<LPCWSTR>(od(levels[i].label)));
         }
 
         HMENU m = CreatePopupMenu();
-        AppendMenuW(m, MF_STRING,             1, L"Refresh now");
-        AppendMenuW(m, MF_POPUP, reinterpret_cast<UINT_PTR>(op), L"Opacity");
-        AppendMenuW(m, MF_SEPARATOR,          0, nullptr);
-        AppendMenuW(m, MF_STRING,             2, L"Exit");
+        AppendMenuW(m, MF_OWNERDRAW,                              1, reinterpret_cast<LPCWSTR>(od(L"Refresh now")));
+        AppendMenuW(m, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)op,       reinterpret_cast<LPCWSTR>(od(L"Opacity", true)));
+        AppendMenuW(m, MF_OWNERDRAW,                              3, reinterpret_cast<LPCWSTR>(od(L"More info...")));
+        AppendMenuW(m, MF_OWNERDRAW | MF_GRAYED,                  0, reinterpret_cast<LPCWSTR>(od(nullptr)));
+        AppendMenuW(m, MF_OWNERDRAW,                              2, reinterpret_cast<LPCWSTR>(od(L"Exit")));
         int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hw, nullptr);
         DestroyMenu(m);
         if (cmd == 1) start_load();
         else if (cmd == 2) DestroyWindow(hw);
+        else if (cmd == 3) {
+            if (g_info) { DestroyWindow(g_info); g_info = nullptr; }
+            build_info_lines();
+            RECT wr; GetWindowRect(hw, &wr);
+            int ix = wr.left, iy = wr.bottom + 4;
+            int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+            if (ix + IW > sw) ix = sw - IW - 4;
+            if (iy + g_info_h > sh) iy = wr.top - g_info_h - 4;
+            g_info = CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+                L"ClaudeUsageInfo", nullptr,
+                WS_POPUP | WS_VISIBLE,
+                ix, iy, IW, g_info_h,
+                nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+            if (g_info) SetFocus(g_info);
+        }
         else if (cmd >= 100 && cmd <= 104) {
             g_opacity = levels[cmd - 100].alpha;
             apply_opacity(hw);
@@ -650,6 +877,15 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
     wc.lpszClassName = L"ClaudeUsageWidget";
     RegisterClassExW(&wc);
+
+    WNDCLASSEXW wi{};
+    wi.cbSize        = sizeof(wi);
+    wi.style         = CS_HREDRAW | CS_VREDRAW;
+    wi.lpfnWndProc   = InfoWndProc;
+    wi.hInstance     = hi;
+    wi.hCursor       = LoadCursor(nullptr, IDC_ARROW);
+    wi.lpszClassName = L"ClaudeUsageInfo";
+    RegisterClassExW(&wi);
 
     load_opacity();
 
