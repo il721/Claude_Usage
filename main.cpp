@@ -78,7 +78,8 @@ struct Metrics {
 
 static Metrics          g_m;
 static CRITICAL_SECTION g_cs;
-static std::atomic<int> g_pending{ 0 };
+static std::atomic<int>       g_pending{ 0 };
+static std::atomic<ULONGLONG> g_load_start{ 0 };   // tick when current load began (watchdog)
 static HWND             g_hwnd = nullptr;
 static POINT            g_drag0, g_win0;
 static bool             g_dragging = false;
@@ -222,6 +223,40 @@ static std::string jfield(const std::string& js, const char* key) {
     return trim(js.substr(p, e == std::string::npos ? std::string::npos : e - p));
 }
 
+// ─── Bounded pipe read ─────────────────────────────────────────────────────────
+// Reads a child's stdout with a hard deadline. The old code looped on a blocking
+// ReadFile and only applied a WaitForSingleObject timeout *after* the loop — so a
+// child that never closed its stdout (e.g. a hung node/ccusage call) blocked the
+// load thread forever, which latched g_pending and froze all future refreshes.
+// On timeout we terminate the child so this can never happen.
+static std::string read_pipe_bounded(HANDLE pr, HANDLE hproc, DWORD timeout_ms) {
+    std::string out;
+    const ULONGLONG deadline = GetTickCount64() + timeout_ms;
+    char buf[4096];
+    for (;;) {
+        DWORD avail = 0;
+        if (PeekNamedPipe(pr, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
+            DWORD want = avail > sizeof(buf) ? (DWORD)sizeof(buf) : avail, n = 0;
+            if (ReadFile(pr, buf, want, &n, nullptr) && n > 0) { out.append(buf, n); continue; }
+            break;                                   // pipe closed / read error
+        }
+        if (WaitForSingleObject(hproc, 0) == WAIT_OBJECT_0) {
+            // Process exited — drain anything still buffered, then stop.
+            for (;;) {
+                DWORD a = 0, n = 0;
+                if (!PeekNamedPipe(pr, nullptr, 0, nullptr, &a, nullptr) || a == 0) break;
+                DWORD want = a > sizeof(buf) ? (DWORD)sizeof(buf) : a;
+                if (!ReadFile(pr, buf, want, &n, nullptr) || n == 0) break;
+                out.append(buf, n);
+            }
+            break;
+        }
+        if (GetTickCount64() >= deadline) { TerminateProcess(hproc, 1); break; }
+        Sleep(20);                                   // idle — avoid busy-spin
+    }
+    return out;
+}
+
 // ─── Subprocess: write .ps1 to temp dir, run, capture stdout ─────────────────
 static std::string run_ps(const char* script) {
     wchar_t tmp[MAX_PATH]{};
@@ -261,12 +296,7 @@ static std::string run_ps(const char* script) {
     CloseHandle(pipe_w);
     CloseHandle(nul);
 
-    std::string out;
-    char buf[4096]; DWORD n;
-    while (ReadFile(pipe_r, buf, sizeof(buf), &n, nullptr) && n > 0)
-        out.append(buf, n);
-
-    WaitForSingleObject(pi.hProcess, 20000);
+    std::string out = read_pipe_bounded(pipe_r, pi.hProcess, 25000);
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(pipe_r);
     DeleteFileW(ps.c_str());
     return out;
@@ -373,9 +403,7 @@ static std::string run_python(const wchar_t* script_path) {
     }
     CloseHandle(pw); CloseHandle(nul);
 
-    std::string out; char buf[4096]; DWORD n;
-    while (ReadFile(pr, buf, sizeof(buf), &n, nullptr) && n > 0) out.append(buf, n);
-    WaitForSingleObject(pi.hProcess, 10000);
+    std::string out = read_pipe_bounded(pr, pi.hProcess, 15000);
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(pr);
     return out;
 }
@@ -505,6 +533,7 @@ DWORD WINAPI load_thread(LPVOID) { load_data(); return 0; }
 
 static void start_load() {
     if (g_pending.fetch_add(1) > 0) { g_pending.fetch_sub(1); return; }
+    g_load_start.store(GetTickCount64());
     EnterCriticalSection(&g_cs);
     g_m.loading = true;
     LeaveCriticalSection(&g_cs);
@@ -869,6 +898,11 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_TIMER:
+        // Watchdog: if a load has been "in flight" far longer than any real load
+        // could take (subprocess reads are capped at ~25s each), assume its
+        // WM_DATA_READY was lost and clear the latch so refresh resumes.
+        if (g_pending.load() > 0 && GetTickCount64() - g_load_start.load() > 120000ULL)
+            g_pending.store(0);
         start_load();
         return 0;
 

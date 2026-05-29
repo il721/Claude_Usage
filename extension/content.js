@@ -1,4 +1,7 @@
-// Fetches Claude.ai session/weekly usage and sends to native host every 5 min.
+// Fetches Claude.ai session/weekly usage and forwards it to the service worker.
+// Polling is primarily driven by the service-worker alarm (FETCH_NOW message),
+// which keeps working even when this tab is backgrounded and page timers are
+// throttled. The setInterval below is only a best-effort fallback.
 const INTERVAL_MS = 3 * 60 * 1000;
 let cachedOrgId = null;
 
@@ -43,5 +46,14 @@ async function fetchAndSend() {
   }
 }
 
+// Fetch once on load.
 fetchAndSend();
+
+// Primary trigger: the service-worker alarm pokes us even when our own timers are
+// throttled by Chrome's background-tab throttling.
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type === 'FETCH_NOW') fetchAndSend();
+});
+
+// Fallback only (subject to background-tab throttling).
 setInterval(fetchAndSend, INTERVAL_MS);

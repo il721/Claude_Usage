@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Claude Usage Widget Bridge",
-  "version": "1.1",
+  "version": "1.2",
   "description": "Sends Claude.ai rate-limit data to the desktop widget.",
   "permissions": ["alarms", "storage", "nativeMessaging"],
   "host_permissions": ["https://claude.ai/*"],
