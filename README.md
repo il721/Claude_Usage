@@ -5,7 +5,14 @@ rate‑limit usage** at a glance — the current 5‑hour session and 7‑day wi
 with reset times — and falls back to **local Claude Code token usage** when
 live limits aren't available.
 
-![Widget](example.png)
+| Full mode | Simple mode |
+|-----------|-------------|
+| ![Full widget](widget_full_view.png) | ![Simple widget](widget_simple_view.png) |
+
+**Full mode** shows each limit as a labelled progress bar with the percentage
+used and the reset time. **Simple mode** is a compact two‑cell view — session
+on top, week below — for when you just want the numbers. Switch between them by
+**double‑clicking** the widget or via the right‑click menu.
 
 ---
 
@@ -95,11 +102,15 @@ fix and a detached launch) and **`/pack`** to rebuild
 ## Using the widget
 
 - **Drag** anywhere to move it; its position is remembered between runs.
+- **Double‑click** to toggle between full and Simple mode. Simple mode anchors
+  to the lower‑left corner of the full widget, so the bottom‑left stays put as
+  the widget shrinks or grows.
 - **Right‑click** for the menu:
-  - **Simple mode** — a compact two‑cell view (session + week) that anchors to
-    the lower‑left corner of the full widget.
-  - **Opacity** — pick a transparency level.
-  - An info popup with reset details.
+  - **Refresh now** — re‑read the usage data immediately.
+  - **Opacity** — pick a transparency level (25–100%).
+  - **More info…** — an info popup with full reset details.
+  - **Simple mode** — same toggle as double‑click (shows a ✓ when active).
+  - **Exit**.
 
 State is persisted under `%USERPROFILE%\.claude\` (window position, opacity,
 `widget_simple.txt` for the Simple‑mode toggle).
