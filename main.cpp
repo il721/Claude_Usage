@@ -54,6 +54,10 @@ static constexpr COLORREF C_MODEL[] = {
 };
 
 constexpr int WW = 430, WH = 150;
+// Compact two-cell "Simple mode". Paddings follow the simple.png mockup; the cells
+// are sized so the digits (auto-fit to fill each cell) are ~2x the earlier size.
+constexpr int SIMPLE_W = 87, SIMPLE_H = 105;
+constexpr int SIMPLE_PADX = 7, SIMPLE_PADY = 6, SIMPLE_GAP = 5;
 constexpr int PAD = 14, BAR_H = 16, TEXT_W = 90;
 constexpr int BAR_W = WW - PAD * 2 - TEXT_W - 8;
 constexpr UINT WM_DATA_READY = WM_USER + 1;
@@ -84,6 +88,7 @@ static HWND             g_hwnd = nullptr;
 static POINT            g_drag0, g_win0;
 static bool             g_dragging = false;
 static BYTE             g_opacity  = 255;            // 0=invisible, 255=opaque
+static bool             g_simple   = false;           // compact two-cell display
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 static bool parse_iso(const std::string& s, SYSTEMTIME& st) {
@@ -182,6 +187,32 @@ static void load_opacity() {
 
 static void apply_opacity(HWND hw) {
     SetLayeredWindowAttributes(hw, 0, g_opacity, LWA_ALPHA);
+}
+
+// ─── Simple-mode persistence ─────────────────────────────────────────────────
+static std::filesystem::path simple_path() {
+    wchar_t prof[MAX_PATH]{};
+    GetEnvironmentVariableW(L"USERPROFILE", prof, MAX_PATH);
+    return std::filesystem::path(std::wstring(prof)) / L".claude" / L"widget_simple.txt";
+}
+
+static void save_simple() {
+    std::ofstream f(simple_path());
+    if (f) f << (g_simple ? 1 : 0) << '\n';
+}
+
+static void load_simple() {
+    std::ifstream f(simple_path());
+    int v; if (f && (f >> v)) g_simple = (v != 0);
+}
+
+// Resize the window + clip region to match the current mode, then repaint.
+static void apply_mode(HWND hw) {
+    int w = g_simple ? SIMPLE_W : WW;
+    int h = g_simple ? SIMPLE_H : WH;
+    SetWindowPos(hw, nullptr, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowRgn(hw, CreateRoundRectRgn(0, 0, w, h, 16, 16), TRUE);
+    InvalidateRect(hw, nullptr, TRUE);
 }
 
 // ─── String helpers ───────────────────────────────────────────────────────────
@@ -546,8 +577,8 @@ static void drawbar(HDC hdc, int y, double frac, bool warn = false) {
     if (fw > 0) fillr(hdc, PAD, y, fw, BAR_H, warn ? C_WARN : C_BAR_FG);
 }
 
-static HFONT makefont(int sz) {
-    return CreateFontW(sz, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+static HFONT makefont(int sz, int weight = FW_NORMAL) {
+    return CreateFontW(sz, 0, 0, 0, weight, 0, 0, 0,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
 }
@@ -558,18 +589,68 @@ static void put(HDC hdc, const wchar_t* s, int x, int y, COLORREF c) {
     TextOutW(hdc, x, y, s, static_cast<int>(wcslen(s)));
 }
 
+// One cell of Simple mode: a horizontal progress bar (width = % used) with the
+// big percentage number overlaid. Bar is blue, turning red at >= 90%.
+static void draw_simple_cell(HDC hdc, int x, int y, int w, int h, double frac) {
+    int pct = static_cast<int>(std::lround(std::clamp(frac, 0.0, 1.0) * 100.0));
+    bool warn = pct >= 90;
+    fillr(hdc, x, y, w, h, C_BAR_BG);
+    int fw = static_cast<int>(w * std::clamp(frac, 0.0, 1.0));
+    if (fw > 0) fillr(hdc, x, y, fw, h, warn ? C_WARN : C_BAR_FG);
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, C_TEXT);
+    wchar_t buf[8];
+    int len = swprintf(buf, 8, L"%d", pct);
+
+    // Auto-fit the digits to fill the cell: measure at a reference em=100, then
+    // scale so the glyph (~0.62 em) fills ~95% of the cell height, bounded by the
+    // cell width so 3-digit values (e.g. 100) shrink instead of clipping.
+    HFONT probe = makefont(100, FW_BOLD);
+    auto  pf    = static_cast<HFONT>(SelectObject(hdc, probe));
+    SIZE  s100; GetTextExtentPoint32W(hdc, buf, len, &s100);
+    SelectObject(hdc, pf); DeleteObject(probe);
+    double by_w = static_cast<double>(w - 6) / (s100.cx ? s100.cx : 1);
+    double by_h = (h * 0.95) / (100 * 0.62);
+    int fh = std::max(8, static_cast<int>(100 * std::min(by_w, by_h)));
+    HFONT f    = makefont(fh, FW_BOLD);
+    auto  prev = static_cast<HFONT>(SelectObject(hdc, f));
+    RECT r{ x, y, x + w, y + h };
+    DrawTextW(hdc, buf, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    SelectObject(hdc, prev); DeleteObject(f);
+}
+
+static void paint_simple(HDC hdc, const Metrics& m) {
+    fillr(hdc, 0, 0, SIMPLE_W, SIMPLE_H, C_BG);
+    if (!m.ok) {
+        HFONT fs = makefont(13);
+        auto prev = static_cast<HFONT>(SelectObject(hdc, fs));
+        put(hdc, m.loading ? L"Loading…" : L"No data", PAD, PAD + 6, C_DIM);
+        SelectObject(hdc, prev); DeleteObject(fs);
+        return;
+    }
+    int cw = SIMPLE_W - SIMPLE_PADX * 2;
+    int ch = (SIMPLE_H - SIMPLE_PADY * 2 - SIMPLE_GAP) / 2;
+    draw_simple_cell(hdc, SIMPLE_PADX, SIMPLE_PADY,                    cw, ch, m.row1_frac);  // session
+    draw_simple_cell(hdc, SIMPLE_PADX, SIMPLE_PADY + ch + SIMPLE_GAP, cw, ch, m.row2_frac);  // week
+}
+
 static void paint(HWND hw) {
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(hw, &ps);
-
-    fillr(hdc, 0, 0, WW, WH, C_BG);
-
-
 
     Metrics m;
     EnterCriticalSection(&g_cs);
     m = g_m;
     LeaveCriticalSection(&g_cs);
+
+    if (g_simple) {
+        paint_simple(hdc, m);
+        EndPaint(hw, &ps);
+        return;
+    }
+
+    fillr(hdc, 0, 0, WW, WH, C_BG);
 
     HFONT fn = makefont(15), fs = makefont(13);
 
@@ -884,7 +965,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE:
         g_hwnd = hw;
-        SetWindowRgn(hw, CreateRoundRectRgn(0, 0, WW, WH, 16, 16), FALSE);
+        apply_mode(hw);   // sets size + rounded region for the current mode
         apply_opacity(hw);
         SetTimer(hw, 1, 60000, nullptr);   // auto-refresh every 1 minute
         start_load();
@@ -999,6 +1080,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         AppendMenuW(m, MF_OWNERDRAW,                              1, reinterpret_cast<LPCWSTR>(od(L"Refresh now")));
         AppendMenuW(m, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)op,       reinterpret_cast<LPCWSTR>(od(L"Opacity", true)));
         AppendMenuW(m, MF_OWNERDRAW,                              3, reinterpret_cast<LPCWSTR>(od(L"More info...")));
+        AppendMenuW(m, MF_OWNERDRAW | (g_simple ? MF_CHECKED : 0), 4, reinterpret_cast<LPCWSTR>(od(L"Simple mode")));
         AppendMenuW(m, MF_OWNERDRAW | MF_GRAYED,                  0, reinterpret_cast<LPCWSTR>(od(nullptr)));
         AppendMenuW(m, MF_OWNERDRAW,                              2, reinterpret_cast<LPCWSTR>(od(L"Exit")));
         int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hw, nullptr);
@@ -1024,6 +1106,11 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                 ix, iy, IW, g_info_h,
                 nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
             if (g_info) SetFocus(g_info);
+        }
+        else if (cmd == 4) {
+            g_simple = !g_simple;
+            save_simple();
+            apply_mode(hw);
         }
         else if (cmd >= 100 && cmd <= 104) {
             g_opacity = levels[cmd - 100].alpha;
@@ -1067,6 +1154,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
     RegisterClassExW(&wi);
 
     load_opacity();
+    load_simple();
 
     int px, py;
     if (!load_pos(px, py))
