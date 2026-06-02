@@ -1015,6 +1015,17 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         g_dragging = false;
         return 0;
 
+    case WM_LBUTTONDBLCLK:
+        // Double-click toggles between Simple and full mode (same as the
+        // right-click menu's "Simple mode" item). The preceding down/up of the
+        // double-click leaves g_dragging cleared, so cancel any stray capture.
+        ReleaseCapture();
+        g_dragging = false;
+        g_simple = !g_simple;
+        save_simple();
+        apply_mode(hw);
+        return 0;
+
     case WM_MEASUREITEM: {
         auto* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
         if (mis->CtlType != ODT_MENU) return DefWindowProcW(hw, msg, wp, lp);
@@ -1142,7 +1153,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
 
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(wc);
-    wc.style         = CS_HREDRAW | CS_VREDRAW;
+    wc.style         = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;  // CS_DBLCLKS → WM_LBUTTONDBLCLK
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hi;
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
