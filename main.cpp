@@ -207,10 +207,15 @@ static void load_simple() {
 }
 
 // Resize the window + clip region to match the current mode, then repaint.
+// The bottom-left corner stays fixed across mode switches, so Simple mode sits
+// in the lower-left corner of where the full widget was (and vice-versa).
 static void apply_mode(HWND hw) {
     int w = g_simple ? SIMPLE_W : WW;
     int h = g_simple ? SIMPLE_H : WH;
-    SetWindowPos(hw, nullptr, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    RECT r; GetWindowRect(hw, &r);          // current rect, screen coords (WS_POPUP)
+    int x = r.left;                         // keep left edge
+    int y = r.bottom - h;                   // keep bottom edge → anchor bottom-left
+    SetWindowPos(hw, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
     SetWindowRgn(hw, CreateRoundRectRgn(0, 0, w, h, 16, 16), TRUE);
     InvalidateRect(hw, nullptr, TRUE);
 }
