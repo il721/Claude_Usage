@@ -53,13 +53,13 @@ static constexpr COLORREF C_MODEL[] = {
     RGB( 43, 194, 154),  // teal
 };
 
-constexpr int WW = 430, WH = 150;
+constexpr int WW = 214, WH = 102;
 // Compact two-cell "Simple mode". Paddings follow the simple.png mockup; the cells
 // are sized so the digits (auto-fit to fill each cell) are ~2x the earlier size.
 constexpr int SIMPLE_W = 87, SIMPLE_H = 105;
 constexpr int SIMPLE_PADX = 7, SIMPLE_PADY = 6, SIMPLE_GAP = 5;
-constexpr int PAD = 14, BAR_H = 16, TEXT_W = 90;
-constexpr int BAR_W = WW - PAD * 2 - TEXT_W - 8;
+constexpr int PAD = 14, BAR_H = 16;
+constexpr int BAR_W = 152;
 constexpr UINT WM_DATA_READY = WM_USER + 1;
 
 // ─── Shared data ─────────────────────────────────────────────────────────────
@@ -445,13 +445,13 @@ static void load_extension(Metrics& m) {
 
     m.row1_label = L"Current session";
     m.row1_frac  = std::clamp(sp / 100.0, 0.0, 1.0);
-    m.row1_right = to_wstr(trim(p[0])) + L"% used";
-    m.row1_sub   = L"Resets " + to_wstr(trim(p[1]));
+    m.row1_right = to_wstr(trim(p[0])) + L"%";
+    m.row1_sub   = to_wstr(trim(p[1]));
 
     m.row2_label = L"Current week (all models)";
     m.row2_frac  = std::clamp(wp / 100.0, 0.0, 1.0);
-    m.row2_right = to_wstr(trim(p[2])) + L"% used";
-    m.row2_sub   = L"Resets " + to_wstr(trim(p[3]));
+    m.row2_right = to_wstr(trim(p[2])) + L"%";
+    m.row2_sub   = to_wstr(trim(p[3]));
 
     m.ok = true;
 }
@@ -671,25 +671,19 @@ static void paint(HWND hw) {
     int y = PAD;
 
     // ── Row 1 ─────────────────────────────────────────────────────────────────
-    SelectObject(hdc, fn);
-    put(hdc, m.row1_label.c_str(), PAD, y, C_TEXT);
-    y += 20;
-
     drawbar(hdc, y + 1, m.row1_frac);
+    SelectObject(hdc, fn);
     put(hdc, m.row1_right.c_str(), PAD + BAR_W + 8, y, C_TEXT);
     y += BAR_H + 6;
 
     SelectObject(hdc, fs);
     put(hdc, m.row1_sub.c_str(), PAD, y, C_DIM);
-    y += 18 + 8;
+    y += 18 + 2;
 
     // ── Row 2 ─────────────────────────────────────────────────────────────────
-    SelectObject(hdc, fn);
-    put(hdc, m.row2_label.c_str(), PAD, y, C_TEXT);
-    y += 20;
-
     bool over = m.row2_frac >= 1.0;
     drawbar(hdc, y + 1, m.row2_frac, over);
+    SelectObject(hdc, fn);
     put(hdc, m.row2_right.c_str(), PAD + BAR_W + 8, y, over ? C_WARN : C_TEXT);
     y += BAR_H + 6;
 

@@ -20,9 +20,7 @@ def local_time(iso: str) -> str:
         dt  = datetime.fromisoformat(iso).astimezone()
         h   = dt.hour % 12 or 12
         ampm = 'pm' if dt.hour >= 12 else 'am'
-        off = dt.strftime('%z')                    # e.g. +0300
-        tz  = f'UTC{off[:3]}' if off else ''       # e.g. UTC+03
-        return f'{h}:{dt.minute:02d}{ampm} ({tz})'
+        return f'{h}:{dt.minute:02d}{ampm}'
     except Exception:
         return iso[:16]
 
@@ -34,9 +32,7 @@ def local_date_time(iso: str) -> str:
         h    = dt.hour % 12 or 12
         ampm = 'pm' if dt.hour >= 12 else 'am'
         mon  = dt.strftime('%b')
-        off  = dt.strftime('%z')
-        tz   = f'UTC{off[:3]}' if off else ''
-        return f'{mon} {dt.day}, {h}{ampm} ({tz})'
+        return f'{mon} {dt.day}, {h}{ampm}'
     except Exception:
         return iso[:16]
 
