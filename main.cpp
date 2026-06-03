@@ -63,11 +63,6 @@ constexpr int BAR_W = 152;
 constexpr UINT WM_DATA_READY = WM_USER + 1;
 
 // ─── Shared data ─────────────────────────────────────────────────────────────
-// Where the displayed numbers came from. SESSION/EXTENSION both read Claude
-// Code's widget_limits.json (a live session writes it natively; the extension
-// writes it otherwise); CCUSAGE is the stale-file fallback.
-enum class Source { NONE, SESSION, EXTENSION, CCUSAGE };
-
 struct Metrics {
     // Row 1 — "Current session" (extension) or "Current block" (ccusage)
     std::wstring row1_label = L"Current session";
@@ -81,9 +76,8 @@ struct Metrics {
     std::wstring row2_right;     // "10% used"
     std::wstring row2_sub;       // "Resets Jun 2, 10am (MSK)"
 
-    Source source  = Source::NONE;
-    bool   ok      = false;
-    bool   loading = true;
+    bool ok      = false;
+    bool loading = true;
 };
 
 static Metrics          g_m;
@@ -441,29 +435,24 @@ static void load_extension(Metrics& m) {
     std::string out = trim(run_python(script.c_str()));
     if (out.empty() || out.starts_with("FALLBACK") || out.starts_with("DEBUG")) return;
 
-    // Format: SOURCE|session_pct|session_reset|week_pct|week_reset
-    // SOURCE is SESSION (live Claude Code session) or EXTENSION (no session).
+    // Format: session_pct|session_reset|week_pct|week_reset
     auto p = split_pipe(out);
-    if (p.size() < 5) return;
+    if (p.size() < 4) return;
 
-    std::string tag = trim(p[0]);
-    Source src = (tag == "SESSION") ? Source::SESSION : Source::EXTENSION;
-
-    double sp = to_double(trim(p[1]));
-    double wp = to_double(trim(p[3]));
+    double sp = to_double(trim(p[0]));
+    double wp = to_double(trim(p[2]));
     if (sp == 0 && wp == 0) return;
 
     m.row1_label = L"Current session";
     m.row1_frac  = std::clamp(sp / 100.0, 0.0, 1.0);
-    m.row1_right = to_wstr(trim(p[1])) + L"%";
-    m.row1_sub   = to_wstr(trim(p[2]));
+    m.row1_right = to_wstr(trim(p[0])) + L"%";
+    m.row1_sub   = to_wstr(trim(p[1]));
 
     m.row2_label = L"Current week (all models)";
     m.row2_frac  = std::clamp(wp / 100.0, 0.0, 1.0);
-    m.row2_right = to_wstr(trim(p[3])) + L"%";
-    m.row2_sub   = to_wstr(trim(p[4]));
+    m.row2_right = to_wstr(trim(p[2])) + L"%";
+    m.row2_sub   = to_wstr(trim(p[3]));
 
-    m.source = src;
     m.ok = true;
 }
 
@@ -551,11 +540,8 @@ static void load_data() {
     Metrics m{};
     m.loading = false;
 
-    load_extension(m);          // widget_limits.json — live session or extension
-    if (!m.ok) {                // file missing/stale → local ccusage cost data
-        load_ccusage(m);
-        if (m.ok) m.source = Source::CCUSAGE;
-    }
+    load_extension(m);          // prefer real rate-limit data from browser
+    if (!m.ok) load_ccusage(m); // fall back to local ccusage cost data
 
     EnterCriticalSection(&g_cs);
     g_m = std::move(m);
@@ -600,25 +586,6 @@ static HFONT makefont(int sz, int weight = FW_NORMAL) {
     return CreateFontW(sz, 0, 0, 0, weight, 0, 0, 0,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
-}
-
-// Tiny corner dot showing which source fed the numbers:
-// blue = live Claude Code session, grey = extension, amber = ccusage fallback.
-static void draw_source_dot(HDC hdc, Source s, int cx, int cy, int r) {
-    COLORREF c;
-    switch (s) {
-        case Source::SESSION:   c = C_BAR_FG;          break;  // blue
-        case Source::EXTENSION: c = C_DIM;             break;  // grey
-        case Source::CCUSAGE:   c = RGB(194, 154, 43); break;  // amber
-        default: return;
-    }
-    HBRUSH br  = CreateSolidBrush(c);
-    HPEN   pen = CreatePen(PS_SOLID, 1, c);
-    auto   ob  = static_cast<HBRUSH>(SelectObject(hdc, br));
-    auto   op  = static_cast<HPEN>(SelectObject(hdc, pen));
-    Ellipse(hdc, cx - r, cy - r, cx + r, cy + r);
-    SelectObject(hdc, ob); SelectObject(hdc, op);
-    DeleteObject(br); DeleteObject(pen);
 }
 
 static void put(HDC hdc, const wchar_t* s, int x, int y, COLORREF c) {
@@ -671,7 +638,6 @@ static void paint_simple(HDC hdc, const Metrics& m) {
     int ch = (SIMPLE_H - SIMPLE_PADY * 2 - SIMPLE_GAP) / 2;
     draw_simple_cell(hdc, SIMPLE_PADX, SIMPLE_PADY,                    cw, ch, m.row1_frac);  // session
     draw_simple_cell(hdc, SIMPLE_PADX, SIMPLE_PADY + ch + SIMPLE_GAP, cw, ch, m.row2_frac);  // week
-    draw_source_dot(hdc, m.source, SIMPLE_W - 5, 5, 2);
 }
 
 static void paint(HWND hw) {
@@ -723,8 +689,6 @@ static void paint(HWND hw) {
 
     SelectObject(hdc, fs);
     put(hdc, m.row2_sub.c_str(), PAD, y, C_DIM);
-
-    draw_source_dot(hdc, m.source, WW - 7, 7, 3);
 
     DeleteObject(fn); DeleteObject(fs);
     EndPaint(hw, &ps);
