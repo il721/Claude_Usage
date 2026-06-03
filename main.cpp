@@ -53,11 +53,11 @@ static constexpr COLORREF C_MODEL[] = {
     RGB( 43, 194, 154),  // teal
 };
 
-constexpr int WW = 214, WH = 102;
+constexpr int WW = 214, WH = 84;
 // Compact two-cell "Simple mode". Paddings follow the simple.png mockup; the cells
 // are sized so the digits (auto-fit to fill each cell) are ~2x the earlier size.
-constexpr int SIMPLE_W = 87, SIMPLE_H = 105;
-constexpr int SIMPLE_PADX = 7, SIMPLE_PADY = 6, SIMPLE_GAP = 5;
+constexpr int SIMPLE_W = 61, SIMPLE_H = 74;
+constexpr int SIMPLE_PADX = 5, SIMPLE_PADY = 4, SIMPLE_GAP = 4;
 constexpr int PAD = 14, BAR_H = 16;
 constexpr int BAR_W = 152;
 constexpr UINT WM_DATA_READY = WM_USER + 1;
@@ -428,10 +428,22 @@ static std::string run_python(const wchar_t* script_path) {
     return out;
 }
 
-static void load_extension(Metrics& m) {
+// Resolve a bundled script. The dev tree and a flat deployment keep scripts
+// beside the exe; the packaged zip puts the exe in cmake-build-debug/ with the
+// scripts one directory up. Search both, falling back to beside-exe.
+static std::wstring script_path(const wchar_t* name) {
     wchar_t exe[MAX_PATH]{};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    auto script = (std::filesystem::path(exe).parent_path() / L"get_limits.py").wstring();
+    auto dir    = std::filesystem::path(exe).parent_path();
+    auto beside = (dir / name).wstring();
+    if (GetFileAttributesW(beside.c_str()) != INVALID_FILE_ATTRIBUTES) return beside;
+    auto above  = (dir.parent_path() / name).wstring();
+    if (GetFileAttributesW(above.c_str()) != INVALID_FILE_ATTRIBUTES) return above;
+    return beside;
+}
+
+static void load_extension(Metrics& m) {
+    auto script = script_path(L"get_limits.py");
     std::string out = trim(run_python(script.c_str()));
     if (out.empty() || out.starts_with("FALLBACK") || out.starts_with("DEBUG")) return;
 
@@ -443,14 +455,18 @@ static void load_extension(Metrics& m) {
     double wp = to_double(trim(p[2]));
     if (sp == 0 && wp == 0) return;
 
+    wchar_t pbuf[16];
+
     m.row1_label = L"Current session";
     m.row1_frac  = std::clamp(sp / 100.0, 0.0, 1.0);
-    m.row1_right = to_wstr(trim(p[0])) + L"%";
+    swprintf(pbuf, 16, L"%.0f%%", sp);
+    m.row1_right = pbuf;
     m.row1_sub   = to_wstr(trim(p[1]));
 
     m.row2_label = L"Current week (all models)";
     m.row2_frac  = std::clamp(wp / 100.0, 0.0, 1.0);
-    m.row2_right = to_wstr(trim(p[2])) + L"%";
+    swprintf(pbuf, 16, L"%.0f%%", wp);
+    m.row2_right = pbuf;
     m.row2_sub   = to_wstr(trim(p[3]));
 
     m.ok = true;
@@ -594,6 +610,13 @@ static void put(HDC hdc, const wchar_t* s, int x, int y, COLORREF c) {
     TextOutW(hdc, x, y, s, static_cast<int>(wcslen(s)));
 }
 
+// Draw text right-aligned so its right edge lands at right_x.
+static void put_right(HDC hdc, const wchar_t* s, int right_x, int y, COLORREF c) {
+    SIZE sz; int len = static_cast<int>(wcslen(s));
+    GetTextExtentPoint32W(hdc, s, len, &sz);
+    put(hdc, s, right_x - sz.cx, y, c);
+}
+
 // One cell of Simple mode: a horizontal progress bar (width = % used) with the
 // big percentage number overlaid. Bar is blue, turning red at >= 90%.
 static void draw_simple_cell(HDC hdc, int x, int y, int w, int h, double frac) {
@@ -677,7 +700,8 @@ static void paint(HWND hw) {
     y += BAR_H + 6;
 
     SelectObject(hdc, fs);
-    put(hdc, m.row1_sub.c_str(), PAD, y, C_DIM);
+    put(hdc, m.row1_sub.c_str(), PAD, y, C_DIM);                 // session reset (left)
+    put_right(hdc, m.row2_sub.c_str(), PAD + BAR_W, y, C_DIM);   // week reset (right of bar)
     y += 18 + 2;
 
     // ── Row 2 ─────────────────────────────────────────────────────────────────
@@ -685,10 +709,6 @@ static void paint(HWND hw) {
     drawbar(hdc, y + 1, m.row2_frac, over);
     SelectObject(hdc, fn);
     put(hdc, m.row2_right.c_str(), PAD + BAR_W + 8, y, over ? C_WARN : C_TEXT);
-    y += BAR_H + 6;
-
-    SelectObject(hdc, fs);
-    put(hdc, m.row2_sub.c_str(), PAD, y, C_DIM);
 
     DeleteObject(fn); DeleteObject(fs);
     EndPaint(hw, &ps);
@@ -705,9 +725,7 @@ static constexpr int DONUT_SEC_H  = 22 + (DONUT_R_OUT * 2 + 20) + 46 + PAD;
 static void load_daily() {
     g_daily.clear();
     g_models.clear();
-    wchar_t exe[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    auto script = (std::filesystem::path(exe).parent_path() / L"get_daily.py").wstring();
+    auto script = script_path(L"get_daily.py");
     std::string out = run_python(script.c_str());
     size_t pos = 0;
     while (pos < out.size()) {
