@@ -18,42 +18,59 @@ two‑cell view of just the numbers. Switch between them by
 
 ## How it works
 
-Claude.ai's usage numbers live behind your first‑party login, so the widget
-can't fetch them directly. The data flows through four small pieces:
+Everything the widget shows comes from one file —
+`%USERPROFILE%\.claude\widget_limits.json` (`five_hour` / `seven_day`
+utilization + reset times). That file has **two producers**, and the widget
+reads it the same way regardless of which one wrote it:
 
 ```
- ┌─────────────────────┐   fetch /usage      ┌──────────────────────┐
- │ Chrome extension    │  (first-party       │ claude.ai             │
- │ content.js + SW     │   cookies)          │ /api/.../usage        │
- └─────────┬───────────┘ ───────────────────►└──────────────────────┘
-           │ Native Messaging
-           ▼
- ┌─────────────────────┐  writes JSON   ┌────────────────────────────────────┐
- │ native_host/host.py │ ─────────────► │ %USERPROFILE%\.claude\             │
- └─────────────────────┘                │   widget_limits.json               │
-                                        └──────────────┬─────────────────────┘
-                                                       │ reads
-                                                       ▼
- ┌──────────────────────────────┐  runs   ┌────────────────────────────────┐
- │ Claude_Usage.exe (main.cpp)  │ ──────► │ get_limits.py  →  pct | reset   │
- │  desktop widget              │         │ get_daily.py   →  local fallback│
- └──────────────────────────────┘         └────────────────────────────────┘
+ (A) live Claude Code session            (B) no session: Chrome extension
+     writes it natively, ~60s                 polls claude.ai /usage with
+            │                                  first-party cookies, writes
+            │                                  it via native_host/host.py
+            ▼                                            │
+ ┌────────────────────────────────────────────────────────────────┐
+ │  %USERPROFILE%\.claude\widget_limits.json                       │
+ │    five_hour.utilization / seven_day.utilization / resets_at    │
+ └───────────────────────────────┬────────────────────────────────┘
+                                 │ reads
+                                 ▼
+ ┌────────────────────────────────────────────────────────────────┐
+ │ get_limits.py → SESSION|pct|reset|… / EXTENSION|… / FALLBACK     │
+ └───────────────────────────────┬────────────────────────────────┘
+                                 ▼
+ ┌────────────────────────────────────────────────────────────────┐
+ │ Claude_Usage.exe (main.cpp) — draws the bars + a source dot      │
+ │   ● blue = session   ● grey = extension   ● amber = ccusage      │
+ └────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Chrome extension** (`extension/`) — a content script runs on `claude.ai`
-   and fetches `/api/organizations/{uuid}/usage` using your first‑party
-   cookies. A service worker (`background.js`) uses `chrome.alarms` to poll
-   every minute, so updates keep flowing even when the tab is backgrounded.
-2. **Native messaging host** (`native_host/host.py`) — receives the usage
-   payload from the extension and writes it to
-   `%USERPROFILE%\.claude\widget_limits.json`.
-3. **`get_limits.py`** — read by the widget; emits
-   `session_pct|session_reset|week_pct|week_reset`, or `FALLBACK` if the JSON
-   is missing or stale (>1 h old).
-4. **`get_daily.py`** — fallback source. Scans
-   `~/.claude/projects/**/*.jsonl` (Claude Code's local logs) for the last
-   30 days and reports per‑day token counts and per‑model totals.
-5. **The widget** (`main.cpp`) renders the bars and refreshes on a timer.
+1. **Live Claude Code session (preferred).** While a `claude` session is
+   running, Claude Code itself refreshes `widget_limits.json` every ~60 s — no
+   extension, no open browser tab needed. `get_limits.py` detects this by
+   checking for a transcript (`~/.claude/projects/**/*.jsonl`) written in the
+   last 180 s and tags its output `SESSION`.
+2. **Chrome extension (no session).** When no session is active, the extension
+   keeps the file fresh: a content script fetches
+   `/api/organizations/{uuid}/usage` with your first‑party cookies, a service
+   worker (`background.js`) polls every minute via `chrome.alarms`, and
+   `native_host/host.py` writes the same `widget_limits.json`. Tagged
+   `EXTENSION`.
+3. **`get_limits.py`** — reads the file and emits
+   `SOURCE|session_pct|session_reset|week_pct|week_reset`, or `FALLBACK` if the
+   JSON is missing or stale (>1 h old).
+4. **ccusage fallback.** On `FALLBACK`, the widget runs `ccusage` for a
+   cost‑based estimate of the current block and week instead. (Tagged by the
+   amber dot.)
+5. **`get_daily.py`** — separate source for the **More info…** popup. Scans
+   `~/.claude/projects/**/*.jsonl` for the last 30 days and reports per‑day
+   token counts and per‑model totals.
+6. **The widget** (`main.cpp`) renders the bars, the small corner **source
+   dot**, and refreshes on a timer.
+
+> **The extension is now optional while you're using Claude Code** — a live
+> session feeds the widget on its own. You only need the extension (and an open
+> `claude.ai` tab) to keep numbers live when no session is running.
 
 ---
 
@@ -61,7 +78,8 @@ can't fetch them directly. The data flows through four small pieces:
 
 - Windows 10/11
 - Python 3 on `PATH` (for the `get_*.py` helpers and the native host)
-- Google Chrome (for the extension that pulls live limits)
+- Google Chrome — **optional**, only for the extension that keeps limits live
+  when no Claude Code session is running
 - To build from source: CLion's bundled MinGW GCC, or any `g++` with C++20
 
 ---
@@ -75,10 +93,11 @@ can't fetch them directly. The data flows through four small pieces:
      path, and
    - register the native messaging host under
      `HKCU\Software\Google\Chrome\NativeMessagingHosts`.
-3. Load the Chrome extension:
-   `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
-   select the `extension/` folder.
-4. Start the widget: `cmake-build-debug\Claude_Usage.exe`.
+3. Start the widget: `cmake-build-debug\Claude_Usage.exe`. While a Claude Code
+   session is running it works immediately — no browser needed.
+4. *(Optional)* For live numbers when **no** session is running, load the Chrome
+   extension: `chrome://extensions` → enable **Developer mode** → **Load
+   unpacked** → select the `extension/` folder.
 
 > The extension's ID must match the `allowed_origins` in the native host
 > manifest. If you repack the extension and the ID changes, update
@@ -102,6 +121,9 @@ fix and a detached launch) and **`/pack`** to rebuild
 ## Using the widget
 
 - **Drag** anywhere to move it; its position is remembered between runs.
+- **Source dot** (small dot in the top‑right corner) shows where the numbers
+  come from: **blue** = live Claude Code session, **grey** = Chrome extension,
+  **amber** = `ccusage` cost estimate.
 - **Double‑click** to toggle between full and Simple mode. Simple mode anchors
   to the lower‑left corner of the full widget, so the bottom‑left stays put as
   the widget shrinks or grows.
