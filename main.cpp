@@ -434,24 +434,10 @@ static std::string run_python(const wchar_t* script_path) {
     return out;
 }
 
-// Locate a bundled Python script. The exe may sit beside the scripts (dev build,
-// where the scripts are copied into the build dir) or one level down in
-// cmake-build-debug while the scripts stay at the package root (the packaged
-// layout). Check next-to-exe first, then the parent dir; fall back to next-to-exe
-// so run_python still produces a clear "file not found" if neither exists.
-static std::wstring find_script(const wchar_t* name) {
+static void load_extension(Metrics& m) {
     wchar_t exe[MAX_PATH]{};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::filesystem::path dir = std::filesystem::path(exe).parent_path();
-    std::error_code ec;
-    for (const auto& cand : { dir / name, dir.parent_path() / name }) {
-        if (std::filesystem::exists(cand, ec)) return cand.wstring();
-    }
-    return (dir / name).wstring();
-}
-
-static void load_extension(Metrics& m) {
-    std::wstring script = find_script(L"get_limits.py");
+    auto script = (std::filesystem::path(exe).parent_path() / L"get_limits.py").wstring();
     std::string out = trim(run_python(script.c_str()));
     if (out.empty() || out.starts_with("FALLBACK") || out.starts_with("DEBUG")) return;
 
@@ -755,7 +741,9 @@ static constexpr int DONUT_SEC_H  = 22 + (DONUT_R_OUT * 2 + 20) + 46 + PAD;
 static void load_daily() {
     g_daily.clear();
     g_models.clear();
-    std::wstring script = find_script(L"get_daily.py");
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    auto script = (std::filesystem::path(exe).parent_path() / L"get_daily.py").wstring();
     std::string out = run_python(script.c_str());
     size_t pos = 0;
     while (pos < out.size()) {
