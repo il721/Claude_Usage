@@ -9,8 +9,9 @@ live limits aren't available.
 |-----------|-------------|
 | ![Full widget](widget_full_view.png) | ![Simple widget](widget_simple_view.png) |
 
-**Full mode** shows each limit as a progress bar with the percentage and the
-reset time beneath it — session on top, week below. **Simple mode** is a compact
+**Full mode** shows each limit as a progress bar with its whole‑number
+percentage — session on top, week below — and the two reset times on the line
+between the bars (session left, week right). **Simple mode** is a compact
 two‑cell view of just the numbers. Switch between them by
 **double‑clicking** the widget or via the right‑click menu.
 
