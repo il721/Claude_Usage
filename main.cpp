@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cmath>
+#include <chrono>
 
 // ─── Palette — from DESIGN.md Modern Dark system ────────────────────────────
 constexpr COLORREF C_BG     = RGB(30,  30,  30);   // background
@@ -89,6 +90,12 @@ static POINT            g_drag0, g_win0;
 static bool             g_dragging = false;
 static BYTE             g_opacity  = 255;            // 0=invisible, 255=opaque
 static bool             g_simple   = false;           // compact two-cell display
+
+// ─── Claude Code alert state ───────────────────────────────────────────────────
+// 0 = none, 1 = solid border (a session finished work), 2 = flashing border (a
+// session is asking / needs input). "asking" wins when both are present.
+static int  g_alert_state = 0;
+static bool g_flash_on    = false;   // current flash phase (toggled by the fast timer)
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 static bool parse_iso(const std::string& s, SYSTEMTIME& st) {
@@ -206,6 +213,40 @@ static void load_simple() {
     int v; if (f && (f >> v)) g_simple = (v != 0);
 }
 
+// ─── Claude Code alert flags ───────────────────────────────────────────────────
+// Each Claude Code session writes one flag file (keyed by session_id) into
+// ~/.claude/widget-alerts/ via the hook script: content "ask" or "done".
+// We aggregate across all sessions: any "ask" → flashing (2), else any "done" →
+// solid (1), else none (0). Files older than 2h are ignored so a session killed
+// without its UserPromptSubmit/SessionEnd hook firing can't pin the border on.
+static std::filesystem::path alerts_dir() {
+    wchar_t prof[MAX_PATH]{};
+    GetEnvironmentVariableW(L"USERPROFILE", prof, MAX_PATH);
+    return std::filesystem::path(std::wstring(prof)) / L".claude" / L"widget-alerts";
+}
+
+static int scan_alert_state() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    auto dir = alerts_dir();
+    if (!fs::exists(dir, ec)) return 0;
+    int state = 0;
+    auto now = fs::file_time_type::clock::now();
+    for (auto it = fs::directory_iterator(dir, ec);
+         it != fs::directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        const auto& e = *it;
+        if (!e.is_regular_file(ec)) continue;
+        auto wt = fs::last_write_time(e, ec);
+        if (!ec && (now - wt) > std::chrono::hours(2)) continue;   // stale
+        std::ifstream f(e.path());
+        std::string s; std::getline(f, s);
+        if (s.find("ask")  != std::string::npos) return 2;         // asking wins
+        if (s.find("done") != std::string::npos) state = 1;
+    }
+    return state;
+}
+
 // Resize the window + clip region to match the current mode, then repaint.
 // The bottom-left corner stays fixed across mode switches, so Simple mode sits
 // in the lower-left corner of where the full widget was (and vice-versa).
@@ -216,7 +257,7 @@ static void apply_mode(HWND hw) {
     int x = r.left;                         // keep left edge
     int y = r.bottom - h;                   // keep bottom edge → anchor bottom-left
     SetWindowPos(hw, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
-    SetWindowRgn(hw, CreateRoundRectRgn(0, 0, w, h, 16, 16), TRUE);
+    SetWindowRgn(hw, nullptr, TRUE);   // plain rectangle (no rounded corners)
     InvalidateRect(hw, nullptr, TRUE);
 }
 
@@ -588,6 +629,19 @@ static void fillr(HDC hdc, int x, int y, int w, int h, COLORREF c) {
     DeleteObject(b);
 }
 
+// White plain-rectangle alert border, drawn just inside the window edge.
+// state 2 (asking) only paints on the flash-on phase; state 1 (done) is steady.
+static void draw_alert_border(HDC hdc, int w, int h) {
+    if (g_alert_state == 0) return;
+    if (g_alert_state == 2 && !g_flash_on) return;
+    constexpr COLORREF wc = RGB(255, 255, 255);
+    constexpr int t = 2;                       // border thickness (px)
+    fillr(hdc, 0,     0,     w, t, wc);        // top
+    fillr(hdc, 0,     h - t, w, t, wc);        // bottom
+    fillr(hdc, 0,     0,     t, h, wc);        // left
+    fillr(hdc, w - t, 0,     t, h, wc);        // right
+}
+
 // frac is set at runtime from loaded usage data (g_m.row1_frac / row2_frac); the
 // data-flow inspection can't see that cross-thread global write and wrongly thinks
 // it's always the default 0.0.
@@ -674,6 +728,7 @@ static void paint(HWND hw) {
 
     if (g_simple) {
         paint_simple(hdc, m);
+        draw_alert_border(hdc, SIMPLE_W, SIMPLE_H);
         EndPaint(hw, &ps);
         return;
     }
@@ -687,6 +742,7 @@ static void paint(HWND hw) {
         put(hdc, m.loading ? L"Loading…" : L"No data — right-click to refresh",
             PAD, PAD + 6, C_DIM);
         DeleteObject(fn); DeleteObject(fs);
+        draw_alert_border(hdc, WW, WH);
         EndPaint(hw, &ps);
         return;
     }
@@ -711,6 +767,7 @@ static void paint(HWND hw) {
     put(hdc, m.row2_right.c_str(), PAD + BAR_W + 8, y, over ? C_WARN : C_TEXT);
 
     DeleteObject(fn); DeleteObject(fs);
+    draw_alert_border(hdc, WW, WH);
     EndPaint(hw, &ps);
 }
 
@@ -941,7 +998,7 @@ static void draw_chart(HDC hdc, int y0) {
 LRESULT CALLBACK InfoWndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE:
-        SetWindowRgn(hw, CreateRoundRectRgn(0, 0, IW, g_info_h, 16, 16), FALSE);
+        // plain rectangle (no rounded corners)
         SetLayeredWindowAttributes(hw, 0, g_opacity, LWA_ALPHA);
         return 0;
     case WM_PAINT: {
@@ -959,6 +1016,7 @@ LRESULT CALLBACK InfoWndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         draw_chart(hdc, y);
         draw_model_chart(hdc, y + (!g_daily.empty() ? CHART_SEC_H + SH * 2 : 0));
         DeleteObject(fn); DeleteObject(fs);
+        draw_alert_border(hdc, IW, g_info_h);
         EndPaint(hw, &ps);
         return 0;
     }
@@ -985,10 +1043,26 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         apply_mode(hw);   // sets size + rounded region for the current mode
         apply_opacity(hw);
         SetTimer(hw, 1, 60000, nullptr);   // auto-refresh every 1 minute
+        SetTimer(hw, 2, 250, nullptr);     // alert-border poll + flash (4 Hz → 2 blinks/sec)
         start_load();
         return 0;
 
     case WM_TIMER:
+        if (wp == 2) {
+            // Fast tick: re-read the aggregated alert state, advance the flash
+            // phase, and repaint only when the visible border could have changed.
+            int  prev_state = g_alert_state;
+            bool prev_flash = g_flash_on;
+            g_alert_state = scan_alert_state();
+            g_flash_on    = (g_alert_state == 2) ? !g_flash_on : true;  // solid = always on
+            bool changed  = (g_alert_state != prev_state) ||
+                            (g_alert_state == 2 && g_flash_on != prev_flash);
+            if (changed) {
+                InvalidateRect(hw, nullptr, FALSE);
+                if (g_info) InvalidateRect(g_info, nullptr, FALSE);
+            }
+            return 0;
+        }
         // Watchdog: if a load has been "in flight" far longer than any real load
         // could take (subprocess reads are capped at ~25s each), assume its
         // WM_DATA_READY was lost and clear the latch so refresh resumes.

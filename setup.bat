@@ -14,7 +14,7 @@ echo ============================================
 echo.
 
 :: 1. Copy get_limits.py next to the .exe so the C++ widget can find it
-echo [1/3] Copying get_limits.py next to the widget executable...
+echo [1/4] Copying get_limits.py next to the widget executable...
 copy /Y "%BASE%\get_limits.py" "%BASE%\cmake-build-debug\get_limits.py" >nul 2>&1
 copy /Y "%BASE%\get_daily.py"  "%BASE%\cmake-build-debug\get_daily.py"  >nul 2>&1
 if errorlevel 1 (
@@ -24,7 +24,7 @@ if errorlevel 1 (
 )
 
 :: 2. Generate com.claude.widget.json with the absolute path to host.bat
-echo [2/3] Generating native host manifest...
+echo [2/4] Generating native host manifest...
 "%PS%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
   "$b = '%BASE%'; $p = $b + '\native_host\host.bat';" ^
   "$j = [PSCustomObject]@{" ^
@@ -42,11 +42,20 @@ if errorlevel 1 (
 )
 
 :: 3. Register the native messaging host in Chrome's registry key
-echo [3/3] Registering Chrome native messaging host...
+echo [3/4] Registering Chrome native messaging host...
 "%REG%" add "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.claude.widget" ^
   /ve /t REG_SZ /d "%BASE%\native_host\com.claude.widget.json" /f >nul
 if errorlevel 1 (
     echo   WARNING: registry write failed
+) else (
+    echo   OK
+)
+
+:: 4. Install Claude Code alert hooks (flashing/solid widget border)
+echo [4/4] Installing Claude Code alert hooks...
+"%PS%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%BASE%\hooks\install_hooks.ps1"
+if errorlevel 1 (
+    echo   WARNING: hook installation failed
 ) else (
     echo   OK
 )

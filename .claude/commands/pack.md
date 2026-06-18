@@ -19,6 +19,9 @@ ready to deploy on another machine.
 | `extension/background.js` | `Claude_Usage_Widget/extension/background.js` |
 | `extension/content.js` | `Claude_Usage_Widget/extension/content.js` |
 | `setup.bat` | `Claude_Usage_Widget/setup.bat` |
+| `hooks/widget_signal.py` | `Claude_Usage_Widget/hooks/widget_signal.py` |
+| `hooks/widget_signal.bat` | `Claude_Usage_Widget/hooks/widget_signal.bat` |
+| `hooks/install_hooks.ps1` | `Claude_Usage_Widget/hooks/install_hooks.ps1` |
 
 **Never include** `native_host/com.claude.widget.json` — it contains a hardcoded
 absolute path; `setup.bat` regenerates it correctly on the target machine.
@@ -51,6 +54,9 @@ files = [
     ('get_limits.py',                         'Claude_Usage_Widget/get_limits.py'),
     ('get_daily.py',                          'Claude_Usage_Widget/get_daily.py'),
     ('setup.bat',                             'Claude_Usage_Widget/setup.bat'),
+    ('hooks/widget_signal.py',                'Claude_Usage_Widget/hooks/widget_signal.py'),
+    ('hooks/widget_signal.bat',               'Claude_Usage_Widget/hooks/widget_signal.bat'),
+    ('hooks/install_hooks.ps1',               'Claude_Usage_Widget/hooks/install_hooks.ps1'),
 ]
 out = root + '/Claude_Usage_Widget.zip'
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
