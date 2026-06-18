@@ -517,7 +517,9 @@ static void load_ccusage(Metrics& m) {
     // ── Active block ─────────────────────────────────────────────────────────
     std::string block_out = run_ps(
         "$ErrorActionPreference = 'SilentlyContinue'\n"
-        "$r = & 'C:/Users/il720506/AppData/Roaming/npm/ccusage.ps1' blocks --json 2>$null | ConvertFrom-Json\n"
+        "$cc = (Get-Command ccusage -ErrorAction SilentlyContinue).Source\n"
+        "if (-not $cc) { $cc = Join-Path $env:APPDATA 'npm\\ccusage.ps1' }\n"
+        "$r = & $cc blocks --json 2>$null | ConvertFrom-Json\n"
         "$a = $r.blocks | Where-Object { $_.isActive -eq $true } | Select-Object -Last 1\n"
         "if ($a) {\n"
         "    $cost = [math]::Round($a.costUSD, 4)\n"
@@ -545,7 +547,9 @@ static void load_ccusage(Metrics& m) {
     // ── Weekly ────────────────────────────────────────────────────────────────
     std::string week_out = run_ps(
         "$ErrorActionPreference = 'SilentlyContinue'\n"
-        "$r = & 'C:/Users/il720506/AppData/Roaming/npm/ccusage.ps1' weekly --json 2>$null | ConvertFrom-Json\n"
+        "$cc = (Get-Command ccusage -ErrorAction SilentlyContinue).Source\n"
+        "if (-not $cc) { $cc = Join-Path $env:APPDATA 'npm\\ccusage.ps1' }\n"
+        "$r = & $cc weekly --json 2>$null | ConvertFrom-Json\n"
         "$a = $r.weekly | Where-Object { $_.agent -eq 'all' } | Select-Object -Last 1\n"
         "if ($a) {\n"
         "    $cost = [math]::Round($a.totalCost, 4)\n"
