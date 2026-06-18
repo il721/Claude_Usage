@@ -92,8 +92,9 @@ static BYTE             g_opacity  = 255;            // 0=invisible, 255=opaque
 static bool             g_simple   = false;           // compact two-cell display
 
 // ─── Claude Code alert state ───────────────────────────────────────────────────
-// 0 = none, 1 = solid border (a session finished work), 2 = flashing border (a
-// session is asking / needs input). "asking" wins when both are present.
+// 0 = none, 1 = a session finished work, 2 = a session is asking / needs input.
+// Both non-zero states blink the bright-yellow border; "asking" (2) wins when
+// both are present (it only affects which one set the flag — the visual is the same).
 static int  g_alert_state = 0;
 static bool g_flash_on    = false;   // current flash phase (toggled by the fast timer)
 
@@ -651,17 +652,16 @@ static void fillr(HDC hdc, int x, int y, int w, int h, COLORREF c) {
     DeleteObject(b);
 }
 
-// White plain-rectangle alert border, drawn just inside the window edge.
-// state 2 (asking) only paints on the flash-on phase; state 1 (done) is steady.
+// Bright-yellow plain-rectangle alert border, drawn just inside the window edge.
+// Both alert states blink: it paints only on the flash-on phase (0 = no border).
 static void draw_alert_border(HDC hdc, int w, int h) {
-    if (g_alert_state == 0) return;
-    if (g_alert_state == 2 && !g_flash_on) return;
-    constexpr COLORREF wc = RGB(255, 255, 255);
-    constexpr int t = 2;                       // border thickness (px)
-    fillr(hdc, 0,     0,     w, t, wc);        // top
-    fillr(hdc, 0,     h - t, w, t, wc);        // bottom
-    fillr(hdc, 0,     0,     t, h, wc);        // left
-    fillr(hdc, w - t, 0,     t, h, wc);        // right
+    if (g_alert_state == 0 || !g_flash_on) return;
+    constexpr COLORREF yc = RGB(255, 255, 0);
+    constexpr int t = 4;                       // border thickness (px)
+    fillr(hdc, 0,     0,     w, t, yc);        // top
+    fillr(hdc, 0,     h - t, w, t, yc);        // bottom
+    fillr(hdc, 0,     0,     t, h, yc);        // left
+    fillr(hdc, w - t, 0,     t, h, yc);        // right
 }
 
 // frac is set at runtime from loaded usage data (g_m.row1_frac / row2_frac); the
@@ -1077,9 +1077,9 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             int  prev_state = g_alert_state;
             bool prev_flash = g_flash_on;
             g_alert_state = scan_alert_state();
-            g_flash_on    = (g_alert_state == 2) ? !g_flash_on : true;  // solid = always on
+            g_flash_on    = (g_alert_state != 0) ? !g_flash_on : true;  // both states blink
             bool changed  = (g_alert_state != prev_state) ||
-                            (g_alert_state == 2 && g_flash_on != prev_flash);
+                            (g_alert_state != 0 && g_flash_on != prev_flash);
             if (changed) {
                 InvalidateRect(hw, nullptr, FALSE);
                 if (g_info) InvalidateRect(g_info, nullptr, FALSE);
@@ -1286,11 +1286,15 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
     if (!load_pos(px, py))
         px = GetSystemMetrics(SM_CXSCREEN) - WW - 20, py = 40;
 
+    // Create at the size matching the loaded mode. apply_mode (in WM_CREATE)
+    // anchors the bottom edge, so creating at full height while g_simple would
+    // push the Simple widget's top down by WH-SIMPLE_H each launch (accumulating
+    // because WM_DESTROY saves the shifted position).
     CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
         L"ClaudeUsageWidget", L"Claude Usage",
         WS_POPUP | WS_VISIBLE,
-        px, py, WW, WH,
+        px, py, g_simple ? SIMPLE_W : WW, g_simple ? SIMPLE_H : WH,
         nullptr, nullptr, hi, nullptr);
 
     MSG msg;
