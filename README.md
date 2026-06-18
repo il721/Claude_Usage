@@ -103,9 +103,11 @@ can't fetch them directly. The data flows through four small pieces:
    select the `extension/` folder.
 4. Start the widget: `cmake-build-debug\Claude_Usage.exe`.
 
-> The extension's ID must match the `allowed_origins` in the native host
-> manifest. If you repack the extension and the ID changes, update
-> `extension/manifest.json`'s key / `allowed_origins` accordingly.
+> The extension ID is pinned to `dfjhnnbfnnfhajbhcgikibbfhbdcampf` by the
+> `"key"` in `extension/manifest.json`, so it stays the same on every machine
+> and matches the `allowed_origins` that `setup.bat` writes. If you ever
+> regenerate that key, update the ID in `setup.bat` (the `allowed_origins`
+> line) to match.
 
 ---
 

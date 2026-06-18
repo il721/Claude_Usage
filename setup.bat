@@ -32,7 +32,7 @@ echo [2/4] Generating native host manifest...
   "  description = 'Claude Usage Widget Bridge';" ^
   "  path = $p;" ^
   "  type = 'stdio';" ^
-  "  allowed_origins = @('chrome-extension://knihebkbljomhhgbbapobpedfjgkmihd/')" ^
+  "  allowed_origins = @('chrome-extension://dfjhnnbfnnfhajbhcgikibbfhbdcampf/')" ^
   "} | ConvertTo-Json;" ^
   "[System.IO.File]::WriteAllText($b + '\native_host\com.claude.widget.json', $j, [System.Text.UTF8Encoding]::new($false))"
 if errorlevel 1 (

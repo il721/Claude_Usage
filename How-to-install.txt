@@ -1,0 +1,103 @@
+============================================================
+ Claude Usage Widget - How to install on a Windows PC
+============================================================
+
+A lightweight desktop widget that shows your Claude.ai rate-limit
+usage (current session + weekly window) and falls back to local
+Claude Code usage. It also blinks a yellow border when a Claude Code
+session needs input or finishes work.
+
+
+------------------------------------------------------------
+ PREREQUISITES
+------------------------------------------------------------
+1. Windows 10 or 11.
+2. Python 3 on PATH.  Check in a terminal:   python --version
+3. Google Chrome  -- only if you want LIVE claude.ai limits.
+4. (Optional) ccusage, for the local-usage fallback:
+        npm install -g ccusage
+
+
+------------------------------------------------------------
+ STEP 1 - Unzip to a permanent folder
+------------------------------------------------------------
+Unzip Claude_Usage_Widget.zip to a stable location you won't move,
+for example:
+
+        C:\Tools\Claude_Usage_Widget\
+
+Do NOT run it from a temporary or Downloads folder: setup.bat records
+this folder's absolute path in the Windows registry.
+
+
+------------------------------------------------------------
+ STEP 2 - Run setup.bat
+------------------------------------------------------------
+Double-click  setup.bat  (no administrator rights needed).
+
+It performs 4 steps and prints OK for each:
+  1. Copies get_limits.py / get_daily.py next to the .exe
+  2. Generates native_host\com.claude.widget.json (with this PC's path)
+  3. Registers the native messaging host in the Chrome registry key
+  4. Installs the Claude Code alert hooks into ~\.claude\settings.json
+
+If any step prints WARNING, see TROUBLESHOOTING below.
+
+
+------------------------------------------------------------
+ STEP 3 - Start the widget
+------------------------------------------------------------
+Run:    cmake-build-debug\Claude_Usage.exe
+
+  - Drag it anywhere; its position is remembered.
+  - Double-click to toggle Full / Simple mode.
+  - Right-click for the menu (Refresh, Opacity, More info, Exit).
+  - Click/tap the widget to dismiss a Claude Code alert border.
+
+Start automatically at login (optional):
+  1. Press Win+R, type   shell:startup   and press Enter.
+  2. Put a SHORTCUT to Claude_Usage.exe in that folder.
+
+
+------------------------------------------------------------
+ CHOOSE YOUR DATA SOURCE
+------------------------------------------------------------
+
+OPTION A - Live claude.ai limits (needs Chrome)
+  1. Open  chrome://extensions
+  2. Turn on "Developer mode" (top-right).
+  3. Click "Load unpacked" and select the  extension\  folder.
+  4. Keep a claude.ai tab open and stay logged in.
+
+  The extension ID is fixed to:
+        dfjhnnbfnnfhajbhcgikibbfhbdcampf
+  so it is the same on every machine and already matches what
+  setup.bat registered -- nothing to adjust. Numbers appear within
+  about a minute (the extension polls while a claude.ai tab is open).
+
+OPTION B - Local usage only (no Chrome)
+  Skip the extension entirely. Make sure ccusage is installed
+  (see prerequisites). The widget then shows your local Claude Code
+  block/weekly usage instead of live claude.ai limits.
+
+
+------------------------------------------------------------
+ VERIFY
+------------------------------------------------------------
+  - Widget shows numbers   -> data path works.
+  - In a Claude Code session, when it asks for input or finishes,
+    the widget blinks a yellow border. Click the widget to clear it.
+
+
+------------------------------------------------------------
+ TROUBLESHOOTING
+------------------------------------------------------------
+  - "No data": confirm Python is on PATH; for live limits make sure
+    the extension is loaded and a claude.ai tab is open; for the
+    fallback make sure ccusage is installed.
+  - Live limits stop updating: the extension only fetches while at
+    least one claude.ai tab is open.
+  - Moved the folder after setup? Re-run setup.bat from the new
+    location so the registered path is correct.
+  - Alert border never appears: re-run setup.bat (step 4 installs the
+    hooks) and start a new Claude Code session.

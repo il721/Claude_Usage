@@ -22,6 +22,7 @@ ready to deploy on another machine.
 | `hooks/widget_signal.py` | `Claude_Usage_Widget/hooks/widget_signal.py` |
 | `hooks/widget_signal.bat` | `Claude_Usage_Widget/hooks/widget_signal.bat` |
 | `hooks/install_hooks.ps1` | `Claude_Usage_Widget/hooks/install_hooks.ps1` |
+| `How-to-install.txt` | `Claude_Usage_Widget/How-to-install.txt` |
 
 **Never include** `native_host/com.claude.widget.json` — it contains a hardcoded
 absolute path; `setup.bat` regenerates it correctly on the target machine.
@@ -57,6 +58,7 @@ files = [
     ('hooks/widget_signal.py',                'Claude_Usage_Widget/hooks/widget_signal.py'),
     ('hooks/widget_signal.bat',               'Claude_Usage_Widget/hooks/widget_signal.bat'),
     ('hooks/install_hooks.ps1',               'Claude_Usage_Widget/hooks/install_hooks.ps1'),
+    ('How-to-install.txt',                    'Claude_Usage_Widget/How-to-install.txt'),
 ]
 out = root + '/Claude_Usage_Widget.zip'
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:

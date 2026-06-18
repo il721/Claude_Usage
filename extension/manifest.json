@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0CLdOKed/K6ac3JklLh6esztpGaU69EUAleTno8xJxBaz46a86GM4Za/NYUQu3YP3/r/gLAzg0Jo3noWWLTFSKCBkV5k/swrqTBYGaflZKb6q2cAZPJJFzcSTggwiE9vKAptOCV7hgztF1pnl3gZ+HCSRkBBlWahILD7NH2A2T8fO62DV7gwSKIKOkkH7MSYqMfBlc5hgvf7OmsZcsgbWgiYo0SzsBPPcq8pJ3swGbjfAhRKNa6iOiN9ZkQw0nt4MpWof6CL04To582GEZ4bhIEPrYTSIKq97hm29gnN+vAkLBN16bXYnI0gWnNpVkQy+JBTceLrZ8RrLPxaSSGeXQIDAQAB",
   "name": "Claude Usage Widget Bridge",
   "version": "1.2",
   "description": "Sends Claude.ai rate-limit data to the desktop widget.",
