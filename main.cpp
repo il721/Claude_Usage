@@ -247,6 +247,24 @@ static int scan_alert_state() {
     return state;
 }
 
+// Acknowledge all current alerts because the user touched/clicked the widget.
+// Clears the in-memory state AND removes every flag file, so the 250ms poll
+// won't immediately re-light the border. Fresh session activity writes new
+// flags afterward and lights it again.
+static void dismiss_alerts() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    for (auto it = fs::directory_iterator(alerts_dir(), ec);
+         it != fs::directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        fs::remove(it->path(), ec);
+    }
+    g_alert_state = 0;
+    g_flash_on    = false;
+    if (g_hwnd) InvalidateRect(g_hwnd, nullptr, FALSE);
+    if (g_info) InvalidateRect(g_info, nullptr, FALSE);
+}
+
 // Resize the window + clip region to match the current mode, then repaint.
 // The bottom-left corner stays fixed across mode switches, so Simple mode sits
 // in the lower-left corner of where the full widget was (and vice-versa).
@@ -1026,6 +1044,7 @@ LRESULT CALLBACK InfoWndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_LBUTTONUP:
     case WM_RBUTTONUP:
+        if (g_alert_state) dismiss_alerts();   // clicking the popup acknowledges alerts
         DestroyWindow(hw);
         return 0;
     case WM_KEYDOWN:
@@ -1085,6 +1104,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_LBUTTONDOWN:
+        if (g_alert_state) dismiss_alerts();   // touch/click acknowledges alerts
         SetCapture(hw); g_dragging = true;
         g_drag0 = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         { RECT wr; GetWindowRect(hw, &wr); g_win0 = { wr.left, wr.top }; }
