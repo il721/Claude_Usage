@@ -28,3 +28,7 @@ Whenever you successfully edit any of these files:
 > "Want me to update `Claude_Usage_Widget.zip` with the latest changes? (`/pack`)"
 
 Do not ask if the file was only read (not modified), and do not ask more than once per conversation turn.
+
+## Deferred work
+
+- **Fully-opaque alert border (DEFERRED 2026-06-18).** The yellow alert border is currently dimmed along with the body by the widget's opacity setting (`SetLayeredWindowAttributes` + `LWA_ALPHA` applies one alpha to the whole window). Making only the border stay 100% opaque needs either a separate click-through overlay window or a per-pixel-alpha (`UpdateLayeredWindow`) rewrite of the paint path — a non-trivial change the user chose not to pursue for now. Do not start it unless asked.

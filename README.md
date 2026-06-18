@@ -17,6 +17,27 @@ two‑cell view of just the numbers. Switch between them by
 
 ---
 
+## Claude Code alert border
+
+The widget doubles as an at‑a‑glance status light for **Claude Code**: when a
+session needs your input or has finished working, a **bright‑yellow blinking
+border** appears around the widget.
+
+![Alert border](widget_alert_view.png)
+
+- Driven by Claude Code lifecycle **hooks** — `Notification` (a session is
+  asking) and `Stop` (a session finished work) light the border; both blink.
+- Each session writes a small flag file into `%USERPROFILE%\.claude\widget-alerts\`;
+  the widget polls that folder ~4×/second and aggregates across all sessions.
+- **Click or tap** the widget to acknowledge and clear the border. It also
+  clears automatically when you reply (`UserPromptSubmit`) or the session ends
+  (`SessionEnd`). Stale flags (>2 h) are ignored.
+- Installed by `setup.bat` (it runs `hooks/install_hooks.ps1`, which copies the
+  bridge script to `~/.claude/hooks/` and merges the four events into
+  `~/.claude/settings.json`).
+
+---
+
 ## How it works
 
 Claude.ai's usage numbers live behind your first‑party login, so the widget
@@ -73,9 +94,10 @@ can't fetch them directly. The data flows through four small pieces:
 2. Run **`setup.bat`**. It will:
    - copy `get_limits.py` / `get_daily.py` next to the `.exe`,
    - generate `native_host/com.claude.widget.json` with the correct absolute
-     path, and
+     path,
    - register the native messaging host under
-     `HKCU\Software\Google\Chrome\NativeMessagingHosts`.
+     `HKCU\Software\Google\Chrome\NativeMessagingHosts`, and
+   - install the Claude Code alert hooks (`hooks/install_hooks.ps1`).
 3. Load the Chrome extension:
    `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
    select the `extension/` folder.
@@ -103,6 +125,8 @@ fix and a detached launch) and **`/pack`** to rebuild
 ## Using the widget
 
 - **Drag** anywhere to move it; its position is remembered between runs.
+- **Click / tap** the widget to acknowledge and clear a Claude Code alert
+  border (see above).
 - **Double‑click** to toggle between full and Simple mode. Simple mode anchors
   to the lower‑left corner of the full widget, so the bottom‑left stays put as
   the widget shrinks or grows.
@@ -114,7 +138,8 @@ fix and a detached launch) and **`/pack`** to rebuild
   - **Exit**.
 
 State is persisted under `%USERPROFILE%\.claude\` (window position, opacity,
-`widget_simple.txt` for the Simple‑mode toggle).
+`widget_simple.txt` for the Simple‑mode toggle, and `widget-alerts\` for the
+Claude Code alert flags).
 
 ---
 
@@ -127,7 +152,8 @@ State is persisted under `%USERPROFILE%\.claude\` (window position, opacity,
 | `get_daily.py` | Local Claude Code token usage (fallback) |
 | `extension/` | Chrome extension (`manifest.json`, `background.js`, `content.js`) |
 | `native_host/` | Native messaging bridge (`host.py`, `host.bat`) |
-| `setup.bat` | One‑shot installer (copies files, writes manifest, registers host) |
+| `hooks/` | Claude Code alert hooks (`widget_signal.py`/`.bat`, `install_hooks.ps1`) |
+| `setup.bat` | One‑shot installer (copies files, writes manifest, registers host, installs hooks) |
 | `build.bat` | Reference g++ build command |
 | `Claude_Usage_Widget.zip` | Packaged, ready‑to‑deploy bundle |
 
