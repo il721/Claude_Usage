@@ -23,11 +23,19 @@ function New-CmdHook([string]$action) {
     @{ hooks = @(@{ type = 'command'; command = "`"$bat`" $action" }) }
 }
 
+function New-MatchedCmdHook([string]$matcher, [string]$action) {
+    @{ matcher = $matcher; hooks = @(@{ type = 'command'; command = "`"$bat`" $action" }) }
+}
+
 $ours = [ordered]@{
     Notification     = @(New-CmdHook 'ask')    # needs input  -> flashing border
     Stop             = @(New-CmdHook 'done')   # finished work -> solid border
-    UserPromptSubmit = @(New-CmdHook 'clear')  # you responded -> clear
+    UserPromptSubmit = @(New-CmdHook 'clear')  # you typed a prompt -> clear
     SessionEnd       = @(New-CmdHook 'clear')  # session gone  -> clear
+    # Answering an AskUserQuestion / approving a permission prompt by *clicking*
+    # an option never fires UserPromptSubmit, so the flashing border used to get
+    # stuck. PostToolUse fires right after you pick, so clear there too.
+    PostToolUse      = @(New-MatchedCmdHook '*' 'clear')
 }
 
 if (($json.PSObject.Properties.Name -contains 'hooks') -and $json.hooks) {

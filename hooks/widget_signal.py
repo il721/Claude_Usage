@@ -8,8 +8,9 @@ stdin (we only need `session_id`). The desired action is the first CLI arg:
     widget_signal.py done    # Stop          -> session finished work (solid)
     widget_signal.py clear   # UserPromptSubmit / SessionEnd -> you responded
 
-It writes/removes one flag file per session in ~/.claude/widget-alerts/, which the
-widget polls. Always exits 0 so it never blocks Claude Code.
+It writes/removes flag files in ~/.claude/widget-alerts/, which the widget polls.
+`ask`/`done` write one flag for the current session; `clear` removes ALL flags
+(see below). Always exits 0 so it never blocks Claude Code.
 """
 import sys
 import os
@@ -36,10 +37,17 @@ def main() -> int:
         alerts.mkdir(parents=True, exist_ok=True)
         flag.write_text(action, encoding="utf-8")
     elif action == "clear":
-        try:
-            flag.unlink()
-        except FileNotFoundError:
-            pass
+        # The user just submitted a prompt (or the session ended): they're
+        # attending to Claude, so silence EVERY session's alert -- same
+        # semantics as clicking the widget. Clearing only this session's flag
+        # left alerts from other/older sessions lit (a second terminal, or a
+        # session that ended without its SessionEnd hook firing -- flags linger
+        # up to 2h), so the border only went dark on a manual click.
+        for f in alerts.glob("*.flag"):
+            try:
+                f.unlink()
+            except OSError:
+                pass
 
     return 0
 

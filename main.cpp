@@ -93,8 +93,8 @@ static bool             g_simple   = false;           // compact two-cell displa
 
 // ─── Claude Code alert state ───────────────────────────────────────────────────
 // 0 = none, 1 = a session finished work, 2 = a session is asking / needs input.
-// Both non-zero states blink the bright-yellow border; "asking" (2) wins when
-// both are present (it only affects which one set the flag — the visual is the same).
+// Both non-zero states blink; "asking" (2) wins when both are present. The state
+// also picks the border colour: yellow for asking (2), white for finished (1).
 static int  g_alert_state = 0;
 static bool g_flash_on    = false;   // current flash phase (toggled by the fast timer)
 
@@ -631,7 +631,59 @@ static void load_data() {
 
 DWORD WINAPI load_thread(LPVOID) { load_data(); return 0; }
 
+// Keep ~/.claude/widget_limits.json fresh without depending on Claude Code's
+// status line (which only runs while CC is open) or the Chrome extension. If
+// ~/.claude/widget_refresh.ps1 exists (the header-based refresher that uses the
+// stored OAuth token), fire it off when the cache is stale — lock-guarded the
+// same way statusline_model.ps1 does so we never spawn a pile of workers. The
+// spawn is fire-and-forget: this tick still reads whatever's on disk, the next
+// 60s tick picks up the freshly-written file. No-ops on machines without the
+// refresher script, leaving the extension/ccusage path untouched.
+static void maybe_refresh_limits() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    wchar_t prof[MAX_PATH]{};
+    GetEnvironmentVariableW(L"USERPROFILE", prof, MAX_PATH);
+    fs::path claude    = fs::path(std::wstring(prof)) / L".claude";
+    fs::path refresher = claude / L"widget_refresh.ps1";
+    if (!fs::exists(refresher, ec)) return;   // not this machine's setup
+
+    fs::path widget = claude / L"widget_limits.json";
+    auto now = fs::file_time_type::clock::now();
+    bool stale = true;
+    if (fs::exists(widget, ec)) {
+        auto wt = fs::last_write_time(widget, ec);
+        if (!ec) stale = (now - wt) > std::chrono::seconds(60);
+    }
+    if (!stale) return;
+
+    // Lock guard: skip if a refresh was kicked off in the last 60s (matches
+    // statusline_model.ps1, so the two cooperate instead of doubling up).
+    fs::path lock = claude / L"_widget.lock";
+    if (fs::exists(lock, ec)) {
+        auto lt = fs::last_write_time(lock, ec);
+        if (!ec && (now - lt) < std::chrono::seconds(60)) return;
+    }
+    { std::ofstream f(lock); f << "widget"; }
+
+    std::wstring cmd =
+        L"\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\""
+        L" -NoProfile -ExecutionPolicy Bypass -File \"" + refresher.wstring() + L"\"";
+    std::vector<wchar_t> buf(cmd.begin(), cmd.end());
+    buf.push_back(0);
+    STARTUPINFOW si{}; si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE,
+                       CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(pi.hProcess);   // fire-and-forget: don't wait
+        CloseHandle(pi.hThread);
+    }
+}
+
 static void start_load() {
+    maybe_refresh_limits();   // refresh the cache file if it's gone stale
     if (g_pending.fetch_add(1) > 0) { g_pending.fetch_sub(1); return; }
     g_load_start.store(GetTickCount64());
     EnterCriticalSection(&g_cs);
@@ -652,16 +704,19 @@ static void fillr(HDC hdc, int x, int y, int w, int h, COLORREF c) {
     DeleteObject(b);
 }
 
-// Bright-yellow plain-rectangle alert border, drawn just inside the window edge.
-// Both alert states blink: it paints only on the flash-on phase (0 = no border).
+// Plain-rectangle alert border, drawn just inside the window edge. Both states
+// blink: it paints only on the flash-on phase (0 = no border). Colour encodes
+// which state set it — yellow when a session is asking / needs input (2), white
+// when a session just finished work (1).
 static void draw_alert_border(HDC hdc, int w, int h) {
     if (g_alert_state == 0 || !g_flash_on) return;
-    constexpr COLORREF yc = RGB(255, 255, 0);
+    const COLORREF bc = (g_alert_state == 2) ? RGB(255, 255, 0)    // ask  → yellow
+                                             : RGB(255, 255, 255);  // done → white
     constexpr int t = 4;                       // border thickness (px)
-    fillr(hdc, 0,     0,     w, t, yc);        // top
-    fillr(hdc, 0,     h - t, w, t, yc);        // bottom
-    fillr(hdc, 0,     0,     t, h, yc);        // left
-    fillr(hdc, w - t, 0,     t, h, yc);        // right
+    fillr(hdc, 0,     0,     w, t, bc);        // top
+    fillr(hdc, 0,     h - t, w, t, bc);        // bottom
+    fillr(hdc, 0,     0,     t, h, bc);        // left
+    fillr(hdc, w - t, 0,     t, h, bc);        // right
 }
 
 // frac is set at runtime from loaded usage data (g_m.row1_frac / row2_frac); the
