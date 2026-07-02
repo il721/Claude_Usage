@@ -4,7 +4,7 @@ as bare integers (no '%') plus formatted local reset times. The z.ai quota endpo
 returns data.limits[]; TOKENS_LIMIT entries each carry a direct `percentage` and a
 `nextResetTime` (epoch ms). The 5-hour window resets sooner than the weekly window,
 so sorting by nextResetTime ascending gives 5h first, weekly last. Reset-time format
-mirrors get_limits.py (5h -> "h:MMam/pm", weekly -> "Mon D, Hampm"). On any failure
+mirrors get_limits.py for 5h ("HH:MM", 24h); weekly is a countdown ("d:hh:mm"). On any failure
 prints nothing (the widget then shows '--' / blank).
 
 API key (first found wins):
@@ -14,7 +14,7 @@ API key (first found wins):
 Raw response is also written to <USERPROFILE>/.claude/widget_zai_raw.json for debugging.
 Endpoint documented by community tools (glm-usage-vscode, openusage).
 """
-import os, json, urllib.request
+import os, json, time, urllib.request
 from datetime import datetime
 
 ENDPOINT = "https://api.z.ai/api/monitor/usage/quota/limit"
@@ -43,18 +43,19 @@ def _fetch(k):
 def _fmt_time(ms):
     try:
         dt = datetime.fromtimestamp(ms / 1000)
-        h = dt.hour % 12 or 12
-        ap = "pm" if dt.hour >= 12 else "am"
-        return f"{h}:{dt.minute:02d}{ap}"
+        return f"{dt.hour:02d}:{dt.minute:02d}"
     except Exception:
         return ""
 
-def _fmt_day(ms):
+def _countdown(ms):
     try:
-        dt = datetime.fromtimestamp(ms / 1000)
-        h = dt.hour % 12 or 12
-        ap = "pm" if dt.hour >= 12 else "am"
-        return f"{dt.strftime('%b')} {dt.day}, {h}{ap}"
+        rem = ms / 1000 - time.time()
+        if rem < 0:
+            rem = 0
+        d  = int(rem // 86400)
+        h  = int((rem % 86400) // 3600)
+        mi = int((rem % 3600) // 60)
+        return f"{d}:{h:02d}:{mi:02d}"
     except Exception:
         return ""
 
@@ -91,7 +92,7 @@ def main():
     toks.sort(key=lambda t: t[0])           # earliest reset first = 5h; latest = weekly
     r5, p5 = toks[0]
     rw, pw = toks[-1]
-    print(f"{p5}|{pw}|{_fmt_time(r5)}|{_fmt_day(rw)}")
+    print(f"{p5}|{pw}|{_fmt_time(r5)}|{_countdown(rw)}")
 
 if __name__ == "__main__":
     main()

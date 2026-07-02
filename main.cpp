@@ -154,9 +154,8 @@ static double block_time_frac(const SYSTEMTIME& start_utc, const SYSTEMTIME& end
 static std::wstring fmt_local_time(SYSTEMTIME utc) {
     SYSTEMTIME loc{};
     SystemTimeToTzSpecificLocalTime(nullptr, &utc, &loc);
-    int h = loc.wHour % 12; if (!h) h = 12;
     wchar_t buf[16];
-    swprintf(buf, 16, L"%d:%02d%s", h, loc.wMinute, loc.wHour >= 12 ? L"pm" : L"am");
+    swprintf(buf, 16, L"%d:%02d", loc.wHour, loc.wMinute);
     return buf;
 }
 

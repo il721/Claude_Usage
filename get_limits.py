@@ -17,22 +17,23 @@ def local_time(iso: str) -> str:
     if not iso:
         return ''
     try:
-        dt  = datetime.fromisoformat(iso).astimezone()
-        h   = dt.hour % 12 or 12
-        ampm = 'pm' if dt.hour >= 12 else 'am'
-        return f'{h}:{dt.minute:02d}{ampm}'
+        dt = datetime.fromisoformat(iso).astimezone()
+        return f'{dt.hour:02d}:{dt.minute:02d}'
     except Exception:
         return iso[:16]
 
-def local_date_time(iso: str) -> str:
+def countdown(iso: str) -> str:
     if not iso:
         return ''
     try:
-        dt   = datetime.fromisoformat(iso).astimezone()
-        h    = dt.hour % 12 or 12
-        ampm = 'pm' if dt.hour >= 12 else 'am'
-        mon  = dt.strftime('%b')
-        return f'{mon} {dt.day}, {h}{ampm}'
+        dt  = datetime.fromisoformat(iso).astimezone()
+        rem = (dt - datetime.now().astimezone()).total_seconds()
+        if rem < 0:
+            rem = 0
+        d  = int(rem // 86400)
+        h  = int((rem % 86400) // 3600)
+        mi = int((rem % 3600) // 60)
+        return f'{d}:{h:02d}:{mi:02d}'
     except Exception:
         return iso[:16]
 
@@ -51,7 +52,7 @@ def main():
     sp = fh.get('utilization')
     sr = local_time(fh.get('resets_at', ''))
     wp = sd.get('utilization')
-    wr = local_date_time(sd.get('resets_at', ''))
+    wr = countdown(sd.get('resets_at', ''))
 
     if sp is None and wp is None:
         print('FALLBACK'); return
