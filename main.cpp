@@ -45,6 +45,11 @@ static constexpr COLORREF C_CHART[4] = {
 
 struct ModelData { std::wstring name; long long total; };
 static std::vector<ModelData> g_models;
+
+// Per-model daily series, parsed from get_daily.py's MDAY|model|day|... lines.
+// Used to render the info-window charts scoped to a single model.
+struct ModelDayData { std::string model; DayData d; };
+static std::vector<ModelDayData> g_mday;
 static constexpr COLORREF C_MODEL[] = {
     RGB( 43, 121, 194),  // blue   (= C_BAR_FG)
     RGB(194,  60,  44),  // red    (= C_WARN)
@@ -54,12 +59,12 @@ static constexpr COLORREF C_MODEL[] = {
     RGB( 43, 194, 154),  // teal
 };
 
-constexpr int WW = 214, WH = 84;
+constexpr int WW = 198, WH = 76;
 // Compact two-cell "Simple mode". Paddings follow the simple.png mockup; the cells
 // are sized so the digits (auto-fit to fill each cell) are ~2x the earlier size.
 constexpr int SIMPLE_W = 61, SIMPLE_H = 74;
 constexpr int SIMPLE_PADX = 5, SIMPLE_PADY = 4, SIMPLE_GAP = 4;
-constexpr int PAD = 14, BAR_H = 16;
+constexpr int PAD = 8, BAR_H = 16;
 constexpr int BAR_W = 152;
 constexpr UINT WM_DATA_READY = WM_USER + 1;
 
@@ -79,6 +84,17 @@ struct Metrics {
 
     bool ok      = false;
     bool loading = true;
+
+    // When a model filter is active, these override the digit text, the reset
+    // subtitles, AND the bar fill fractions with z.ai Coding Plan quota. Labels
+    // keep showing subscription.
+    bool         filtered  = false;
+    std::wstring filt_dig1;   // row 1 / top cell digit (5-hour quota %)
+    std::wstring filt_dig2;   // row 2 / bottom cell digit (weekly quota %)
+    std::wstring filt_sub1;   // row 1 sub: z.ai 5-hour reset time
+    std::wstring filt_sub2;   // row 2 sub: z.ai weekly reset time
+    double       filt_frac1 = 0.0;  // row 1 bar fill: 5-hour quota fraction (0..1)
+    double       filt_frac2 = 0.0;  // row 2 bar fill: weekly quota fraction (0..1)
 };
 
 static Metrics          g_m;
@@ -90,6 +106,9 @@ static POINT            g_drag0, g_win0;
 static bool             g_dragging = false;
 static BYTE             g_opacity  = 255;            // 0=invisible, 255=opaque
 static bool             g_simple   = false;           // compact two-cell display
+// When non-empty, the info window's charts are filtered to this one model
+// (e.g. "glm-5.2"). Empty = show all models aggregated, as before.
+static std::string      g_filter_model;
 
 // ─── Claude Code alert state ───────────────────────────────────────────────────
 // 0 = none, 1 = a session finished work, 2 = a session is asking / needs input.
@@ -212,6 +231,25 @@ static void save_simple() {
 static void load_simple() {
     std::ifstream f(simple_path());
     int v; if (f && (f >> v)) g_simple = (v != 0);
+}
+
+// ─── Model-filter persistence ────────────────────────────────────────────────
+// Stores the selected model key (e.g. "glm-5.2") or empty for "all models".
+static std::filesystem::path model_path() {
+    wchar_t prof[MAX_PATH]{};
+    GetEnvironmentVariableW(L"USERPROFILE", prof, MAX_PATH);
+    return std::filesystem::path(std::wstring(prof)) / L".claude" / L"widget_model.txt";
+}
+
+static void save_model() {
+    std::ofstream f(model_path());
+    if (f) f << g_filter_model << '\n';
+}
+
+static void load_model() {
+    std::ifstream f(model_path());
+    std::string v;
+    if (f >> v) g_filter_model = v;   // model keys ("glm-5.2") have no spaces
 }
 
 // ─── Claude Code alert flags ───────────────────────────────────────────────────
@@ -519,13 +557,13 @@ static void load_extension(Metrics& m) {
 
     m.row1_label = L"Current session";
     m.row1_frac  = std::clamp(sp / 100.0, 0.0, 1.0);
-    swprintf(pbuf, 16, L"%.0f%%", sp);
+    swprintf(pbuf, 16, L"%.0f", sp);
     m.row1_right = pbuf;
     m.row1_sub   = to_wstr(trim(p[1]));
 
     m.row2_label = L"Current week (all models)";
     m.row2_frac  = std::clamp(wp / 100.0, 0.0, 1.0);
-    swprintf(pbuf, 16, L"%.0f%%", wp);
+    swprintf(pbuf, 16, L"%.0f", wp);
     m.row2_right = pbuf;
     m.row2_sub   = to_wstr(trim(p[3]));
 
@@ -554,7 +592,7 @@ static void load_ccusage(Metrics& m) {
         if (parse_iso(trim(bp[1]), st_s) && parse_iso(trim(bp[2]), st_e)) {
             double frac = block_time_frac(st_s, st_e);
             wchar_t buf[64];
-            swprintf(buf, 64, L"%.0f%% ($%.2f)", frac * 100.0, cost);
+            swprintf(buf, 64, L"%.0f ($%.2f)", frac * 100.0, cost);
             m.row1_label = L"Current block";
             m.row1_frac  = frac;
             m.row1_right = buf;
@@ -606,7 +644,7 @@ static void load_ccusage(Metrics& m) {
         double frac  = (budget > 0) ? std::min(wcost / budget, 1.0) : 0.0;
         double pct_v = (budget > 0) ? wcost / budget * 100.0 : 0.0;
         wchar_t buf[64];
-        swprintf(buf, 64, L"%.0f%% ($%.2f)", pct_v, wcost);
+        swprintf(buf, 64, L"%.0f ($%.2f)", pct_v, wcost);
         m.row2_label = L"This week (all models)";
         m.row2_frac  = frac;
         m.row2_right = buf;
@@ -616,12 +654,83 @@ static void load_ccusage(Metrics& m) {
     }
 }
 
+// Local YYYY-MM-DD (days_ago = 0 → today), matching get_daily.py's day keys.
+static std::string local_date_str(int days_ago) {
+    SYSTEMTIME st; GetLocalTime(&st);
+    FILETIME ft; SystemTimeToFileTime(&st, &ft);
+    ULARGE_INTEGER u; u.LowPart = ft.dwLowDateTime; u.HighPart = ft.dwHighDateTime;
+    u.QuadPart -= static_cast<ULONGLONG>(days_ago) * 24ULL * 60 * 60 * 10000000ULL;
+    ft.dwLowDateTime = u.LowPart; ft.dwHighDateTime = u.HighPart;
+    FileTimeToSystemTime(&ft, &st);
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+    return buf;
+}
+
+// Compact token-count formatting: 4207980 → "4.2M", 12500 → "12K", 800 → "800".
+static std::wstring human_tokens(long long n) {
+    if (n >= 1000000) {
+        int whole  = (int)(n / 1000000);
+        int tenths = (int)((n % 1000000) / 100000);   // 0..9
+        return std::to_wstring(whole) + L"." + std::to_wstring(tenths) + L"M";
+    }
+    if (n >= 1000) return std::to_wstring(n / 1000) + L"K";
+    return std::to_wstring(n);
+}
+
+// z.ai GLM Coding Plan quota: 5-hour % and weekly % as bare integers (no '%'), plus
+// each window's reset time as a formatted string. Runs get_zai.py which prints
+// "<5h>|<week>|<reset5h>|<resetweek>" (or nothing on failure). Returns false (values
+// left 0 / empty) when the script is absent, the key is missing, or parsing fails.
+static bool zai_quota(int& five_h, int& week, std::wstring& sub1, std::wstring& sub2) {
+    five_h = 0; week = 0; sub1.clear(); sub2.clear();
+    std::string out = run_python(script_path(L"get_zai.py").c_str());
+    std::string last;
+    size_t pos = 0;
+    while (pos < out.size()) {
+        auto nl = out.find('\n', pos);
+        std::string ln = trim(out.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos));
+        pos = (nl == std::string::npos) ? out.size() : nl + 1;
+        if (!ln.empty()) last = ln;
+    }
+    if (last.empty()) return false;
+    auto p = split_pipe(last);
+    if (p.size() < 2) return false;
+    std::string a = trim(p[0]), b = trim(p[1]);
+    if (a.empty() || b.empty()) return false;
+    if (!isdigit((unsigned char)a[0]) || !isdigit((unsigned char)b[0])) return false;
+    try { five_h = std::stoi(a); } catch (...) { return false; }
+    try { week   = std::stoi(b); } catch (...) { return false; }
+    if (p.size() >= 4) {
+        sub1 = to_wstr(trim(p[2]));
+        sub2 = to_wstr(trim(p[3]));
+    }
+    return true;
+}
+
 static void load_data() {
     Metrics m{};
     m.loading = false;
 
     load_extension(m);          // prefer real rate-limit data from browser
     if (!m.ok) load_ccusage(m); // fall back to local ccusage cost data
+
+    // GLM-5.2 filter active: replace ONLY the digit text with z.ai's Coding Plan
+    // quota — 5-hour % on row 1, weekly % on row 2, bare integers (no '%').
+    // Bars + labels keep showing subscription. Falls back to "--" if z.ai is
+    // unreachable / no API key.
+    if (!g_filter_model.empty()) {
+        int five_h = 0, week = 0;
+        std::wstring s1, s2;
+        bool ok = zai_quota(five_h, week, s1, s2);
+        m.filtered  = true;
+        m.filt_dig1 = ok ? std::to_wstring(five_h) : L"--";
+        m.filt_dig2 = ok ? std::to_wstring(week)   : L"--";
+        m.filt_sub1 = ok ? s1 : L"";
+        m.filt_sub2 = ok ? s2 : L"";
+        m.filt_frac1 = ok ? std::clamp(five_h / 100.0, 0.0, 1.0) : 0.0;
+        m.filt_frac2 = ok ? std::clamp(week / 100.0, 0.0, 1.0) : 0.0;
+    }
 
     EnterCriticalSection(&g_cs);
     g_m = std::move(m);
@@ -748,9 +857,11 @@ static void put_right(HDC hdc, const wchar_t* s, int right_x, int y, COLORREF c)
     put(hdc, s, right_x - sz.cx, y, c);
 }
 
-// One cell of Simple mode: a horizontal progress bar (width = % used) with the
-// big percentage number overlaid. Bar is blue, turning red at >= 90%.
-static void draw_simple_cell(HDC hdc, int x, int y, int w, int h, double frac) {
+// One cell of Simple mode: a horizontal progress bar (width = % used) with a big
+// number overlaid. Bar is blue, turning red at >= 90%. When `digits` is non-null it
+// replaces the percentage text (used to show a filtered model's token usage).
+static void draw_simple_cell(HDC hdc, int x, int y, int w, int h, double frac,
+                             const wchar_t* digits = nullptr) {
     int pct = static_cast<int>(std::lround(std::clamp(frac, 0.0, 1.0) * 100.0));
     bool warn = pct >= 90;
     fillr(hdc, x, y, w, h, C_BAR_BG);
@@ -759,15 +870,17 @@ static void draw_simple_cell(HDC hdc, int x, int y, int w, int h, double frac) {
 
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, C_TEXT);
-    wchar_t buf[8];
-    int len = swprintf(buf, 8, L"%d", pct);
+    wchar_t pctbuf[8];
+    const wchar_t* text;
+    if (digits) text = digits;
+    else { swprintf(pctbuf, 8, L"%d", pct); text = pctbuf; }
 
-    // Auto-fit the digits to fill the cell: measure at a reference em=100, then
+    // Auto-fit the text to fill the cell: measure at a reference em=100, then
     // scale so the glyph (~0.62 em) fills ~95% of the cell height, bounded by the
-    // cell width so 3-digit values (e.g. 100) shrink instead of clipping.
+    // cell width so wider values shrink instead of clipping.
     HFONT probe = makefont(100, FW_BOLD);
     auto  pf    = static_cast<HFONT>(SelectObject(hdc, probe));
-    SIZE  s100; GetTextExtentPoint32W(hdc, buf, len, &s100);
+    SIZE  s100; GetTextExtentPoint32W(hdc, text, (int)wcslen(text), &s100);
     SelectObject(hdc, pf); DeleteObject(probe);
     double by_w = static_cast<double>(w - 6) / (s100.cx ? s100.cx : 1);
     double by_h = (h * 0.95) / (100 * 0.62);
@@ -775,7 +888,7 @@ static void draw_simple_cell(HDC hdc, int x, int y, int w, int h, double frac) {
     HFONT f    = makefont(fh, FW_BOLD);
     auto  prev = static_cast<HFONT>(SelectObject(hdc, f));
     RECT r{ x, y, x + w, y + h };
-    DrawTextW(hdc, buf, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    DrawTextW(hdc, text, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
     SelectObject(hdc, prev); DeleteObject(f);
 }
 
@@ -790,8 +903,8 @@ static void paint_simple(HDC hdc, const Metrics& m) {
     }
     int cw = SIMPLE_W - SIMPLE_PADX * 2;
     int ch = (SIMPLE_H - SIMPLE_PADY * 2 - SIMPLE_GAP) / 2;
-    draw_simple_cell(hdc, SIMPLE_PADX, SIMPLE_PADY,                    cw, ch, m.row1_frac);  // session
-    draw_simple_cell(hdc, SIMPLE_PADX, SIMPLE_PADY + ch + SIMPLE_GAP, cw, ch, m.row2_frac);  // week
+    draw_simple_cell(hdc, SIMPLE_PADX, SIMPLE_PADY,                    cw, ch, m.filtered ? m.filt_frac1 : m.row1_frac, m.filtered ? m.filt_dig1.c_str() : nullptr);  // session
+    draw_simple_cell(hdc, SIMPLE_PADX, SIMPLE_PADY + ch + SIMPLE_GAP, cw, ch, m.filtered ? m.filt_frac2 : m.row2_frac, m.filtered ? m.filt_dig2.c_str() : nullptr);  // week
 }
 
 static void paint(HWND hw) {
@@ -827,21 +940,22 @@ static void paint(HWND hw) {
     int y = PAD;
 
     // ── Row 1 ─────────────────────────────────────────────────────────────────
-    drawbar(hdc, y + 1, m.row1_frac);
+    drawbar(hdc, y + 1, m.filtered ? m.filt_frac1 : m.row1_frac);
     SelectObject(hdc, fn);
-    put(hdc, m.row1_right.c_str(), PAD + BAR_W + 8, y, C_TEXT);
+    put(hdc, (m.filtered ? m.filt_dig1 : m.row1_right).c_str(), PAD + BAR_W + 8, y, C_TEXT);
     y += BAR_H + 6;
 
     SelectObject(hdc, fs);
-    put(hdc, m.row1_sub.c_str(), PAD, y, C_DIM);                 // session reset (left)
-    put_right(hdc, m.row2_sub.c_str(), PAD + BAR_W, y, C_DIM);   // week reset (right of bar)
+    put(hdc, (m.filtered ? m.filt_sub1 : m.row1_sub).c_str(), PAD, y, C_DIM);                 // reset (left)
+    put_right(hdc, (m.filtered ? m.filt_sub2 : m.row2_sub).c_str(), PAD + BAR_W, y, C_DIM);   // reset (right of bar)
     y += 18 + 2;
 
     // ── Row 2 ─────────────────────────────────────────────────────────────────
-    bool over = m.row2_frac >= 1.0;
-    drawbar(hdc, y + 1, m.row2_frac, over);
+    bool over = (m.filtered ? m.filt_frac2 : m.row2_frac) >= 1.0;
+    drawbar(hdc, y + 1, m.filtered ? m.filt_frac2 : m.row2_frac, over);
     SelectObject(hdc, fn);
-    put(hdc, m.row2_right.c_str(), PAD + BAR_W + 8, y, over ? C_WARN : C_TEXT);
+    put(hdc, (m.filtered ? m.filt_dig2 : m.row2_right).c_str(), PAD + BAR_W + 8, y,
+        m.filtered ? C_TEXT : (over ? C_WARN : C_TEXT));
 
     DeleteObject(fn); DeleteObject(fs);
     draw_alert_border(hdc, WW, WH);
@@ -859,6 +973,7 @@ static constexpr int DONUT_SEC_H  = 22 + (DONUT_R_OUT * 2 + 20) + 46 + PAD;
 static void load_daily() {
     g_daily.clear();
     g_models.clear();
+    g_mday.clear();
     auto script = script_path(L"get_daily.py");
     std::string out = run_python(script.c_str());
     size_t pos = 0;
@@ -877,6 +992,20 @@ static void load_daily() {
             }
             continue;
         }
+        if (ln.starts_with("MDAY|")) {
+            auto p = split_pipe(ln);
+            if (p.size() >= 7) {
+                ModelDayData m{};
+                m.model = trim(p[1]);
+                DayData d{};
+                std::string ds = trim(p[2]);
+                for (size_t i = 0; i < ds.size() && i < 11; ++i) d.date[i] = (wchar_t)ds[i];
+                for (int j = 0; j < 4; ++j) { try { d.v[j] = std::stoll(trim(p[j+3])); } catch (...) {} }
+                m.d = d;
+                g_mday.push_back(m);
+            }
+            continue;
+        }
         auto p = split_pipe(ln);
         if (p.size() < 5) continue;
         DayData d{};
@@ -887,16 +1016,74 @@ static void load_daily() {
     }
 }
 
+// Daily series for the currently filtered model (already date-sorted by emission),
+// or an empty vector when no filter is set.
+static std::vector<DayData> filtered_daily(const std::string& model) {
+    std::vector<DayData> out;
+    if (model.empty()) return out;
+    for (auto& m : g_mday)
+        if (m.model == model) out.push_back(m.d);
+    return out;
+}
+
 static void build_info_lines() {
     g_ilines.clear();
     load_daily();
     g_info_h = PAD * 2
              + (!g_daily.empty()  ? CHART_SEC_H          : LH)
-             + (!g_models.empty() ? DONUT_SEC_H + SH * 2 : 0);
+             + (g_filter_model.empty()
+                  ? (!g_models.empty() ? DONUT_SEC_H + SH * 2 : 0)   // full donut
+                  : (SH * 2 + LH));                                   // one summary line
+}
+
+// (Re)open the "More info…" popup just below (or above) the widget, clamped to
+// the work area. Fresh data is loaded via build_info_lines(), so this is also
+// used to refresh the popup after a view setting (e.g. the model filter) changes.
+static void open_info(HWND hw) {
+    if (g_info) { DestroyWindow(g_info); g_info = nullptr; }
+    build_info_lines();
+    RECT wr; GetWindowRect(hw, &wr);
+    int ix = wr.left, iy = wr.bottom + 4;
+    MONITORINFO mi{}; mi.cbSize = sizeof(mi);
+    GetMonitorInfo(MonitorFromWindow(hw, MONITOR_DEFAULTTONEAREST), &mi);
+    RECT& mr = mi.rcWork;
+    if (ix + IW > mr.right)  ix = mr.right - IW;
+    if (ix < mr.left)        ix = mr.left;
+    if (iy + g_info_h > mr.bottom) iy = wr.top - g_info_h - 4;
+    if (iy < mr.top)         iy = mr.top;
+    g_info = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+        L"ClaudeUsageInfo", nullptr,
+        WS_POPUP | WS_VISIBLE,
+        ix, iy, IW, g_info_h,
+        nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (g_info) SetFocus(g_info);
 }
 
 static void draw_model_chart(HDC hdc, int y0) {
     if (g_models.empty()) return;
+
+    // When filtered to one model, the donut would be a single full slice, so
+    // show that model's total + share-of-all as a one-line summary instead.
+    if (!g_filter_model.empty()) {
+        long long all = 0, mine = 0;
+        std::wstring key = to_wstr(g_filter_model);
+        for (auto& m : g_models) {
+            all += m.total;
+            if (m.name == key) mine = m.total;
+        }
+        std::wstring label = key;
+        for (auto& c : label) if (c >= L'a' && c <= L'z') c -= 32;   // glm-5.2 → GLM-5.2
+        label += L" — " + human_tokens(mine) + L" tokens";
+        if (all > 0) label += L"  (" + std::to_wstring(mine * 100 / all) + L"% of all)";
+        HFONT fn = makefont(14);
+        SelectObject(hdc, fn);
+        SetBkMode(hdc, TRANSPARENT);
+        put(hdc, label.c_str(), PAD, y0, C_TEXT);
+        DeleteObject(fn);
+        return;
+    }
+
     int n = (int)g_models.size();
 
     // Title
@@ -981,15 +1168,21 @@ static void draw_model_chart(HDC hdc, int y0) {
     DeleteObject(fs);
 }
 
-static void draw_chart(HDC hdc, int y0) {
-    if (g_daily.empty()) return;
-    int n   = (int)g_daily.size();
+static void draw_chart(HDC hdc, int y0, const std::vector<DayData>& days) {
+    if (days.empty()) return;
+    int n   = (int)days.size();
     int cx0 = PAD, cx1 = IW - PAD, cw = cx1 - cx0;
 
-    // Title
+    // Title (names the model when the view is filtered to one)
+    std::wstring title = L"Daily Token Usage — Last 30 Days";
+    if (!g_filter_model.empty()) {
+        std::wstring m = to_wstr(g_filter_model);
+        for (auto& c : m) if (c >= L'a' && c <= L'z') c -= 32;   // glm-5.2 → GLM-5.2
+        title = L"Daily Token Usage — " + m;
+    }
     HFONT fn = makefont(14);
     SelectObject(hdc, fn);
-    put(hdc, L"Daily Token Usage — Last 30 Days", cx0, y0, C_TEXT);
+    put(hdc, title.c_str(), cx0, y0, C_TEXT);
     DeleteObject(fn);
     y0 += 22;
 
@@ -1031,7 +1224,7 @@ static void draw_chart(HDC hdc, int y0) {
 
     // Per-metric maxima (for independent normalisation)
     long long mx[4] = {};
-    for (auto& d : g_daily)
+    for (auto& d : days)
         for (int j = 0; j < 4; ++j)
             mx[j] = std::max(mx[j], d.v[j]);
 
@@ -1049,13 +1242,13 @@ static void draw_chart(HDC hdc, int y0) {
 
         for (int j = 0; j < 4; ++j) {
             if (mx[j] == 0) continue;
-            int bh = (int)((double)g_daily[i].v[j] / (double)mx[j] * CHART_H_BARS);
+            int bh = (int)((double)days[i].v[j] / (double)mx[j] * CHART_H_BARS);
             if (bh < 1) continue;
             fillr(hdc, gx + j * (bw + 1), bbot - bh, bw, bh, C_CHART[j]);
         }
 
         if (i % skip == 0) {
-            const wchar_t* d = g_daily[i].date;  // "2026-05-28"
+            const wchar_t* d = days[i].date;  // "2026-05-28"
             wchar_t lbl[6]{};
             if (wcslen(d) >= 10) {
                 lbl[0] = d[5]; lbl[1] = d[6];  // MM
@@ -1090,7 +1283,7 @@ LRESULT CALLBACK InfoWndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             put(hdc, l.text.c_str(), PAD, y, l.col);
             y += LH;
         }
-        draw_chart(hdc, y);
+        draw_chart(hdc, y, g_filter_model.empty() ? g_daily : filtered_daily(g_filter_model));
         draw_model_chart(hdc, y + (!g_daily.empty() ? CHART_SEC_H + SH * 2 : 0));
         DeleteObject(fn); DeleteObject(fs);
         draw_alert_border(hdc, IW, g_info_h);
@@ -1262,36 +1455,24 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         AppendMenuW(m, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)op,       reinterpret_cast<LPCWSTR>(od(L"Opacity", true)));
         AppendMenuW(m, MF_OWNERDRAW,                              3, reinterpret_cast<LPCWSTR>(od(L"More info...")));
         AppendMenuW(m, MF_OWNERDRAW | (g_simple ? MF_CHECKED : 0), 4, reinterpret_cast<LPCWSTR>(od(L"Simple mode")));
+        AppendMenuW(m, MF_OWNERDRAW | (g_filter_model == "glm-5.2" ? MF_CHECKED : 0), 5, reinterpret_cast<LPCWSTR>(od(L"GLM-5.2")));
         AppendMenuW(m, MF_OWNERDRAW | MF_GRAYED,                  0, reinterpret_cast<LPCWSTR>(od(nullptr)));
         AppendMenuW(m, MF_OWNERDRAW,                              2, reinterpret_cast<LPCWSTR>(od(L"Exit")));
         int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hw, nullptr);
         DestroyMenu(m);
         if (cmd == 1) start_load();
         else if (cmd == 2) DestroyWindow(hw);
-        else if (cmd == 3) {
-            if (g_info) { DestroyWindow(g_info); g_info = nullptr; }
-            build_info_lines();
-            RECT wr; GetWindowRect(hw, &wr);
-            int ix = wr.left, iy = wr.bottom + 4;
-            MONITORINFO mi{}; mi.cbSize = sizeof(mi);
-            GetMonitorInfo(MonitorFromWindow(hw, MONITOR_DEFAULTTONEAREST), &mi);
-            RECT& mr = mi.rcWork;
-            if (ix + IW > mr.right)  ix = mr.right - IW;
-            if (ix < mr.left)        ix = mr.left;
-            if (iy + g_info_h > mr.bottom) iy = wr.top - g_info_h - 4;
-            if (iy < mr.top)         iy = mr.top;
-            g_info = CreateWindowExW(
-                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
-                L"ClaudeUsageInfo", nullptr,
-                WS_POPUP | WS_VISIBLE,
-                ix, iy, IW, g_info_h,
-                nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-            if (g_info) SetFocus(g_info);
-        }
+        else if (cmd == 3) open_info(hw);
         else if (cmd == 4) {
             g_simple = !g_simple;
             save_simple();
             apply_mode(hw);
+        }
+        else if (cmd == 5) {
+            g_filter_model = (g_filter_model == "glm-5.2") ? "" : "glm-5.2";
+            save_model();
+            start_load();                // refresh the main widget's digits now
+            if (g_info) open_info(hw);   // refresh the open info popup too
         }
         else if (cmd >= 100 && cmd <= 104) {
             g_opacity = levels[cmd - 100].alpha;
@@ -1336,6 +1517,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
 
     load_opacity();
     load_simple();
+    load_model();
 
     int px, py;
     if (!load_pos(px, py))

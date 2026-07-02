@@ -1,7 +1,8 @@
 """
 Reads ~/.claude/projects/**/*.jsonl (last 30 days) and outputs:
-  Daily lines:  YYYY-MM-DD|input|output|cache_read|cache_creation
-  Model lines:  MODEL|model_name|total_tokens
+  Daily lines:       YYYY-MM-DD|input|output|cache_read|cache_creation
+  Model lines:       MODEL|model_name|total_tokens
+  Per-model daily:   MDAY|model_name|YYYY-MM-DD|input|output|cache_read|cache_creation
 """
 import os, json
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,8 @@ def main():
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     daily  = defaultdict(lambda: [0, 0, 0, 0])
     models = defaultdict(int)
+    # Per-model daily breakdown, for the widget's model-filter view.
+    daily_by_model = defaultdict(lambda: defaultdict(lambda: [0, 0, 0, 0]))
     seen   = set()  # message ids already counted (Claude Code duplicates them on resume)
 
     for jf in projects_dir.glob('**/*.jsonl'):
@@ -63,6 +66,11 @@ def main():
                         model = msg.get('model', '')
                         if model:
                             models[model] += inp + out + cr + cc
+                            mbd = daily_by_model[model][day]
+                            mbd[0] += inp
+                            mbd[1] += out
+                            mbd[2] += cr
+                            mbd[3] += cc
                     except Exception:
                         pass
         except Exception:
@@ -76,6 +84,12 @@ def main():
     for model, total in sorted(models.items(), key=lambda x: -x[1]):
         if total > 0:
             print(f'MODEL|{model}|{total}')
+
+    for model in sorted(daily_by_model):
+        for day in sorted(daily_by_model[model]):
+            d = daily_by_model[model][day]
+            if any(d):
+                print(f'MDAY|{model}|{day}|{d[0]}|{d[1]}|{d[2]}|{d[3]}')
 
 if __name__ == '__main__':
     main()

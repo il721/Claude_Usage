@@ -16,6 +16,8 @@ session needs input or finishes work.
 3. Google Chrome  -- only if you want LIVE claude.ai limits.
 4. (Optional) ccusage, for the local-usage fallback:
         npm install -g ccusage
+5. (Optional, GLM-5.2 mode only) a z.ai GLM Coding Plan API key
+   (see the GLM-5.2 MODE section below).
 
 
 ------------------------------------------------------------
@@ -51,7 +53,7 @@ Run:    cmake-build-debug\Claude_Usage.exe
 
   - Drag it anywhere; its position is remembered.
   - Double-click to toggle Full / Simple mode.
-  - Right-click for the menu (Refresh, Opacity, More info, Exit).
+  - Right-click for the menu (Refresh, Opacity, More info, GLM-5.2, Exit).
   - Click/tap the widget to dismiss a Claude Code alert border.
 
 Start automatically at login (optional):
@@ -79,6 +81,28 @@ OPTION B - Local usage only (no Chrome)
   Skip the extension entirely. Make sure ccusage is installed
   (see prerequisites). The widget then shows your local Claude Code
   block/weekly usage instead of live claude.ai limits.
+
+
+------------------------------------------------------------
+ GLM-5.2 MODE  (optional)
+------------------------------------------------------------
+Right-click the widget and tick "GLM-5.2" to switch the numbers from
+your Claude subscription to your z.ai GLM Coding Plan quota:
+  - Top digit + bar    = 5-hour window used %
+  - Bottom digit + bar = weekly window used %
+  - Reset times show the real z.ai reset times.
+Values are bare numbers with no "%" sign. Untick to return to Claude data.
+
+This mode needs a z.ai API key. Provide it in ONE of these ways:
+  - File:   %USERPROFILE%\.claude\widget_zai_key.txt
+            (create the file, paste the key on one line, save it)
+  - or env: ZAI_API_KEY   (GLM_API_KEY / ANTHROPIC_AUTH_TOKEN also work)
+Get a key at:  https://z.ai/manage-apikey/apikey-list
+Without a key the widget shows "--" while GLM-5.2 is ticked.
+
+get_zai.py is bundled in the zip and is found automatically next to
+the .exe, so no extra setup step is needed. It fetches the quota
+directly from z.ai; no browser is required.
 
 
 ------------------------------------------------------------
