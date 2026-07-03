@@ -1,4 +1,4 @@
-"""
+r"""
 Chrome Native Messaging host for Claude Usage Widget.
 Receives rate-limit data from the extension and saves it to
 %USERPROFILE%\.claude\widget_limits.json
