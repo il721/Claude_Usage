@@ -16,6 +16,7 @@ Whenever you successfully edit any of these files:
 - `main.cpp`
 - `get_limits.py`
 - `get_daily.py`
+- `get_zai.py`
 - `extension/background.js`
 - `extension/content.js`
 - `extension/manifest.json`

@@ -13,6 +13,7 @@ ready to deploy on another machine.
 | `cmake-build-debug/libwinpthread-1.dll` | `Claude_Usage_Widget/cmake-build-debug/libwinpthread-1.dll` |
 | `get_limits.py` | `Claude_Usage_Widget/get_limits.py` |
 | `get_daily.py` | `Claude_Usage_Widget/get_daily.py` |
+| `get_zai.py` | `Claude_Usage_Widget/get_zai.py` |
 | `native_host/host.py` | `Claude_Usage_Widget/native_host/host.py` |
 | `native_host/host.bat` | `Claude_Usage_Widget/native_host/host.bat` |
 | `extension/manifest.json` | `Claude_Usage_Widget/extension/manifest.json` |
@@ -54,6 +55,7 @@ files = [
     ('extension/content.js',                  'Claude_Usage_Widget/extension/content.js'),
     ('get_limits.py',                         'Claude_Usage_Widget/get_limits.py'),
     ('get_daily.py',                          'Claude_Usage_Widget/get_daily.py'),
+    ('get_zai.py',                            'Claude_Usage_Widget/get_zai.py'),
     ('setup.bat',                             'Claude_Usage_Widget/setup.bat'),
     ('hooks/widget_signal.py',                'Claude_Usage_Widget/hooks/widget_signal.py'),
     ('hooks/widget_signal.bat',               'Claude_Usage_Widget/hooks/widget_signal.bat'),
