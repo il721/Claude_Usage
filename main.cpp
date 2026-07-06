@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <windowsx.h>
+#include <shellapi.h>
 #include <string>
 #include <vector>
 #include <fstream>
@@ -13,12 +14,12 @@
 #include <chrono>
 
 // ─── Palette — from DESIGN.md Modern Dark system ────────────────────────────
-constexpr COLORREF C_BG     = RGB(30,  30,  30);   // background
-constexpr COLORREF C_BAR_BG = RGB(60,  60,  60);    // button normal
-constexpr COLORREF C_BAR_FG = RGB(43,  121, 194);   // #2B79C2 primary accent
-constexpr COLORREF C_WARN   = RGB(194, 60,  44);    // over-limit red
-constexpr COLORREF C_TEXT   = RGB(230, 230, 230);   // text primary
-constexpr COLORREF C_DIM    = RGB(150, 150, 150);   // text secondary
+static COLORREF C_BG     = RGB(30,  30,  30);   // background
+static COLORREF C_BAR_BG = RGB(60,  60,  60);    // button normal
+static COLORREF C_BAR_FG = RGB(43,  121, 194);   // #2B79C2 primary accent
+static COLORREF C_WARN   = RGB(194, 60,  44);    // over-limit red
+static COLORREF C_TEXT   = RGB(230, 230, 230);   // text primary
+static COLORREF C_DIM    = RGB(150, 150, 150);   // text secondary
 
 // ─── Owner-drawn menu items ───────────────────────────────────────────────────
 struct OdItem { const wchar_t* label; bool has_arrow; };
@@ -109,6 +110,29 @@ static bool             g_simple   = false;           // compact two-cell displa
 // When non-empty, the info window's charts are filtered to this one model
 // (e.g. "glm-5.2"). Empty = show all models aggregated, as before.
 static std::string      g_filter_model;
+
+// ─── Active palette ───────────────────────────────────────────────────────────
+// C_BG/C_BAR_BG/C_BAR_FG/C_WARN/C_TEXT/C_DIM are mutable; this swaps them to a
+// distinct dark scheme when a model filter is active (GLM-5.2 copy) so the
+// filtered widget is visually distinguishable from a default copy. Default
+// scheme = Modern Dark (blue accent). Filtered scheme = black + green/yellow/red (from reference image).
+static void recompute_palette() {
+    if (g_filter_model.empty()) {
+        C_BG     = RGB( 30,  30,  30);   // #1E1E1E
+        C_BAR_BG = RGB( 60,  60,  60);   // #3C3C3C
+        C_BAR_FG = RGB( 43, 121, 194);   // #2B79C2 blue accent
+        C_WARN   = RGB(194,  60,  44);   // #C23C2C red
+        C_TEXT   = RGB(230, 230, 230);   // #E6E6E6
+        C_DIM    = RGB(150, 150, 150);   // #969696
+    } else {
+        C_BG     = RGB(  0,   0,   0);   // #000000 black background
+        C_BAR_BG = RGB( 51,  51,  51);   // #333333 gray panel / bar track
+        C_BAR_FG = RGB(  0, 128,   0);   // #008000 green bar fill / accent
+        C_WARN   = RGB(255,   0,   0);   // #FF0000 red warning
+        C_TEXT   = RGB(255, 255,   0);   // #FFFF00 yellow text
+        C_DIM    = RGB(140, 140, 140);   // #8C8C8C gray subtitle (not in image; readable on black)
+    }
+}
 
 // ─── Claude Code alert state ───────────────────────────────────────────────────
 // 0 = none, 1 = a session finished work, 2 = a session is asking / needs input.
@@ -1468,10 +1492,12 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             apply_mode(hw);
         }
         else if (cmd == 5) {
-            g_filter_model = (g_filter_model == "glm-5.2") ? "" : "glm-5.2";
-            save_model();
-            start_load();                // refresh the main widget's digits now
-            if (g_info) open_info(hw);   // refresh the open info popup too
+            // Launch a fresh copy filtered to GLM-5.2, cascaded beside this one
+            // (the new process counts existing widgets for its px offset). The
+            // current instance is left untouched.
+            wchar_t exe[MAX_PATH]{};
+            GetModuleFileNameW(nullptr, exe, MAX_PATH);
+            ShellExecuteW(nullptr, L"open", exe, L"--glm", nullptr, SW_SHOWNORMAL);
         }
         else if (cmd >= 100 && cmd <= 104) {
             g_opacity = levels[cmd - 100].alpha;
@@ -1492,7 +1518,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
-int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
+int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR lpCmdLine, int) {
     InitializeCriticalSection(&g_cs);
     find_python(); // cache on main thread before background loads start
 
@@ -1518,9 +1544,33 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
     load_simple();
     load_model();
 
+    // A copy launched via the right-click "GLM-5.2" action passes --glm; force
+    // the filter on in memory without persisting (the shared model file stays
+    // untouched so ordinary launches remain unfiltered).
+    if (lpCmdLine && strstr(lpCmdLine, "--glm")) {
+        g_filter_model = "glm-5.2";
+    }
+
+    recompute_palette();   // pick default vs GLM palette based on filter state
+
     int px, py;
     if (!load_pos(px, py))
         px = GetSystemMetrics(SM_CXSCREEN) - WW - 20, py = 40;
+
+    // Multi-instance: cascade each concurrently-running copy horizontally
+    // so multiple widgets don't stack on the exact same pixels. Count
+    // existing ClaudeUsageWidget top-level windows (prior instances only —
+    // this window is not created yet) and offset px by 72px (> SIMPLE_W) per prior
+    // instance. Vertical pos stays shared so all copies keep the same row.
+    {
+        int n = 0;
+        HWND hw = nullptr;
+        while ((hw = FindWindowExW(nullptr, hw, L"ClaudeUsageWidget", nullptr)) != nullptr)
+            ++n;
+        if (n > 0) {
+            px += n * 72;
+        }
+    }
 
     // Create at the size matching the loaded mode. apply_mode (in WM_CREATE)
     // anchors the bottom edge, so creating at full height while g_simple would
