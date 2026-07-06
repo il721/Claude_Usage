@@ -17,8 +17,9 @@ echo.
 echo [1/4] Copying get_limits.py next to the widget executable...
 copy /Y "%BASE%\get_limits.py" "%BASE%\cmake-build-debug\get_limits.py" >nul 2>&1
 copy /Y "%BASE%\get_daily.py"  "%BASE%\cmake-build-debug\get_daily.py"  >nul 2>&1
+copy /Y "%BASE%\get_zai.py"    "%BASE%\cmake-build-debug\get_zai.py"    >nul 2>&1
 if errorlevel 1 (
-    echo   WARNING: could not copy get_limits.py / get_daily.py - is cmake-build-debug\Claude_Usage.exe built?
+    echo   WARNING: could not copy get_limits.py / get_daily.py / get_zai.py - is cmake-build-debug\Claude_Usage.exe built?
 ) else (
     echo   OK
 )

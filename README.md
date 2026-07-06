@@ -3,7 +3,8 @@
 A lightweight Win32 desktop widget (C++/WinAPI) that shows your **Claude.ai
 rate‑limit usage** at a glance — the current 5‑hour session and 7‑day window,
 with reset times — and falls back to **local Claude Code token usage** when
-live limits aren't available.
+live limits aren't available. It can also show your **z.ai GLM Coding Plan
+quota** as a separate, color‑coded copy.
 
 | Full mode | Simple mode |
 |-----------|-------------|
@@ -14,6 +15,44 @@ percentage — session on top, week below — and the two reset times on the lin
 between the bars (session left, week right). **Simple mode** is a compact
 two‑cell view of just the numbers. Switch between them by
 **double‑clicking** the widget or via the right‑click menu.
+
+---
+
+## GLM‑5.2 mode (z.ai Coding Plan)
+
+A second copy of the widget can display your **z.ai GLM Coding Plan quota**
+instead of the Claude numbers — the 5‑hour rolling window and the weekly
+window, each as a percentage with its reset time. It runs side‑by‑side with
+the default copy and uses a distinct **dark green/yellow** palette so the two
+are easy to tell apart.
+
+| GLM full mode | GLM simple mode |
+|---------------|-----------------|
+| ![GLM full](widget_glm_view.png) | ![GLM simple](widget_glm_simple_view.png) |
+
+Launch it from the default widget's right‑click menu → **GLM‑5.2**. This
+starts a fresh copy (filtered to GLM); the original keeps showing Claude
+usage. Each additional copy is cascaded 72 px to the right so they don't
+stack.
+
+The quota comes from `get_zai.py`, which calls z.ai's quota endpoint. It needs
+a key (first found wins):
+
+- env var `ZAI_API_KEY`, `GLM_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`, or
+- a file at `%USERPROFILE%\.claude\widget_zai_key.txt` containing the key.
+
+Without a key the GLM copy shows `--`. Raw API responses are dumped to
+`%USERPROFILE%\.claude\widget_zai_raw.json` for debugging.
+
+---
+
+## Multiple copies
+
+You can run several widgets at once — just launch the `.exe` again (or pick
+**GLM‑5.2** from the menu). Each new copy is offset 72 px to the right of the
+existing ones so they don't overlap. Position, opacity, and mode are shared
+across copies through the same files under `%USERPROFILE%\.claude\`, so the
+last copy to close wins the saved position for the next launch.
 
 ---
 
@@ -41,7 +80,7 @@ border** appears around the widget.
 ## How it works
 
 Claude.ai's usage numbers live behind your first‑party login, so the widget
-can't fetch them directly. The data flows through four small pieces:
+can't fetch them directly. The data flows through five small pieces:
 
 ```
  ┌─────────────────────┐   fetch /usage      ┌──────────────────────┐
@@ -56,10 +95,12 @@ can't fetch them directly. The data flows through four small pieces:
                                         └──────────────┬─────────────────────┘
                                                        │ reads
                                                        ▼
- ┌──────────────────────────────┐  runs   ┌────────────────────────────────┐
- │ Claude_Usage.exe (main.cpp)  │ ──────► │ get_limits.py  →  pct | reset   │
- │  desktop widget              │         │ get_daily.py   →  local fallback│
- └──────────────────────────────┘         └────────────────────────────────┘
+ ┌──────────────────────────────┐  runs   ┌────────────────────────────────────┐
+ │ Claude_Usage.exe (main.cpp)  │ ──────► │ get_limits.py  →  pct | reset       │
+ │  desktop widget              │         │ get_daily.py   →  local fallback    │
+ └──────────────────────────────┘         │ get_zai.py     →  z.ai GLM quota   │
+       │  (GLM copy)        ─────────────►│   (needs a z.ai key; see above)    │
+       └──────────────────────────────────┴────────────────────────────────────┘
 ```
 
 1. **Chrome extension** (`extension/`) — a content script runs on `claude.ai`
@@ -75,7 +116,10 @@ can't fetch them directly. The data flows through four small pieces:
 4. **`get_daily.py`** — fallback source. Scans
    `~/.claude/projects/**/*.jsonl` (Claude Code's local logs) for the last
    30 days and reports per‑day token counts and per‑model totals.
-5. **The widget** (`main.cpp`) renders the bars and refreshes on a timer.
+5. **`get_zai.py`** — read by a GLM‑filtered copy; calls z.ai's quota
+   endpoint and emits `5h_pct|week_pct|5h_reset|week_countdown` (bare
+   integers), or nothing on failure.
+6. **The widget** (`main.cpp`) renders the bars and refreshes on a timer.
 
 ---
 
@@ -84,6 +128,7 @@ can't fetch them directly. The data flows through four small pieces:
 - Windows 10/11
 - Python 3 on `PATH` (for the `get_*.py` helpers and the native host)
 - Google Chrome (for the extension that pulls live limits)
+- A z.ai API key (env var or `widget_zai_key.txt`) — **only** for the GLM copy
 - To build from source: CLion's bundled MinGW GCC, or any `g++` with C++20
 
 ---
@@ -92,7 +137,7 @@ can't fetch them directly. The data flows through four small pieces:
 
 1. Unzip `Claude_Usage_Widget.zip`.
 2. Run **`setup.bat`**. It will:
-   - copy `get_limits.py` / `get_daily.py` next to the `.exe`,
+   - copy `get_limits.py` / `get_daily.py` / `get_zai.py` next to the `.exe`,
    - generate `native_host/com.claude.widget.json` with the correct absolute
      path,
    - register the native messaging host under
@@ -102,6 +147,8 @@ can't fetch them directly. The data flows through four small pieces:
    `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
    select the `extension/` folder.
 4. Start the widget: `cmake-build-debug\Claude_Usage.exe`.
+5. *(Optional)* For the GLM copy, set a z.ai key (see above), then right‑click
+   the widget → **GLM‑5.2**.
 
 > The extension ID is pinned to `dfjhnnbfnnfhajbhcgikibbfhbdcampf` by the
 > `"key"` in `extension/manifest.json`, so it stays the same on every machine
@@ -137,11 +184,13 @@ fix and a detached launch) and **`/pack`** to rebuild
   - **Opacity** — pick a transparency level (25–100%).
   - **More info…** — an info popup with full reset details.
   - **Simple mode** — same toggle as double‑click (shows a ✓ when active).
+  - **GLM‑5.2** — launch a separate copy filtered to the z.ai GLM Coding Plan
+    quota (distinct green/yellow palette). The current widget is unchanged.
   - **Exit**.
 
 State is persisted under `%USERPROFILE%\.claude\` (window position, opacity,
-`widget_simple.txt` for the Simple‑mode toggle, and `widget-alerts\` for the
-Claude Code alert flags).
+`widget_simple.txt` for the Simple‑mode toggle, `widget_model.txt` for the
+model filter, and `widget-alerts\` for the Claude Code alert flags).
 
 ---
 
@@ -152,6 +201,7 @@ Claude Code alert flags).
 | `main.cpp` | The C++/WinAPI widget (rendering, menu, persistence) |
 | `get_limits.py` | Live limits from `widget_limits.json` → widget |
 | `get_daily.py` | Local Claude Code token usage (fallback) |
+| `get_zai.py` | z.ai GLM Coding Plan quota (for the GLM copy) |
 | `extension/` | Chrome extension (`manifest.json`, `background.js`, `content.js`) |
 | `native_host/` | Native messaging bridge (`host.py`, `host.bat`) |
 | `hooks/` | Claude Code alert hooks (`widget_signal.py`/`.bat`, `install_hooks.ps1`) |
@@ -169,3 +219,5 @@ Claude Code alert flags).
 - If live limits stop updating, confirm the Chrome extension is loaded and a
   `claude.ai` tab is open — the service worker only fetches when at least one
   is present.
+- The GLM copy needs its own z.ai key; Claude and z.ai credentials are
+  independent.
