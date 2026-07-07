@@ -110,6 +110,8 @@ static bool             g_simple   = false;           // compact two-cell displa
 // When non-empty, the info window's charts are filtered to this one model
 // (e.g. "glm-5.2"). Empty = show all models aggregated, as before.
 static std::string      g_filter_model;
+static bool             g_ending_session = false; // set by WM_ENDSESSION; suppresses WM_DESTROY save_state
+static UINT             g_msg_exit_all   = 0;     // registered once in WinMain; broadcast to close all copies
 
 // ─── Active palette ───────────────────────────────────────────────────────────
 // C_BG/C_BAR_BG/C_BAR_FG/C_WARN/C_TEXT/C_DIM are mutable; this swaps them to a
@@ -125,7 +127,7 @@ static void recompute_palette() {
         C_TEXT   = RGB(230, 230, 230);   // #E6E6E6
         C_DIM    = RGB(150, 150, 150);   // #969696
     } else {
-        C_BG     = RGB(  0,   0,   0);   // #000000 black background
+        C_BG     = RGB( 40,  40,  40);   // #282828 dark-grey background
         C_BAR_BG = RGB( 51,  51,  51);   // #333333 gray panel / bar track
         C_BAR_FG = RGB(  0, 128,   0);   // #008000 green bar fill / accent
         C_WARN   = RGB(255,   0,   0);   // #FF0000 red warning
@@ -273,6 +275,35 @@ static void load_model() {
     std::ifstream f(model_path());
     std::string v;
     if (f >> v) g_filter_model = v;   // model keys ("glm-5.2") have no spaces
+}
+
+// ─── Session-state persistence ───────────────────────────────────────────────
+// widget_state.txt: one line per running copy, format: "x y model" where model
+// is the g_filter_model string or '-' if no filter is active.
+static std::filesystem::path state_path() {
+    wchar_t prof[MAX_PATH]{};
+    GetEnvironmentVariableW(L"USERPROFILE", prof, MAX_PATH);
+    return std::filesystem::path(std::wstring(prof)) / L".claude" / L"widget_state.txt";
+}
+
+static void save_state(HWND self, bool include_self) {
+    std::ofstream f(state_path());
+    if (!f) return;
+    HWND h = nullptr;
+    while ((h = FindWindowExW(nullptr, h, L"ClaudeUsageWidget", nullptr)) != nullptr) {
+        if (!include_self && h == self) continue;
+        RECT wr{}; GetWindowRect(h, &wr);
+        wchar_t title[256]{};
+        GetWindowTextW(h, title, 256);
+        // Extract model from title after '|'; default to '-' (no filter).
+        std::string model = "-";
+        const wchar_t* pipe = wcschr(title, L'|');
+        if (pipe) {
+            const wchar_t* p = pipe + 1;
+            model.assign(p, p + wcslen(p)); // ASCII model names: safe narrow cast
+        }
+        f << wr.left << ' ' << wr.top << ' ' << model << '\n';
+    }
 }
 
 // ─── Claude Code alert flags ───────────────────────────────────────────────────
@@ -1331,6 +1362,11 @@ LRESULT CALLBACK InfoWndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
 
 // ─── Window procedure ─────────────────────────────────────────────────────────
 LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
+    if (g_msg_exit_all && msg == g_msg_exit_all) {
+        g_ending_session = true;
+        DestroyWindow(hw);
+        return 0;
+    }
     switch (msg) {
     case WM_CREATE:
         g_hwnd = hw;
@@ -1392,7 +1428,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONUP:
         ReleaseCapture();
-        if (g_dragging) save_pos(hw);
+        if (g_dragging) { save_pos(hw); save_state(hw, true); }
         g_dragging = false;
         return 0;
 
@@ -1478,13 +1514,20 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         AppendMenuW(m, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)op,       reinterpret_cast<LPCWSTR>(od(L"Opacity", true)));
         AppendMenuW(m, MF_OWNERDRAW,                              3, reinterpret_cast<LPCWSTR>(od(L"More info...")));
         AppendMenuW(m, MF_OWNERDRAW | (g_simple ? MF_CHECKED : 0), 4, reinterpret_cast<LPCWSTR>(od(L"Simple mode")));
-        AppendMenuW(m, MF_OWNERDRAW | (g_filter_model == "glm-5.2" ? MF_CHECKED : 0), 5, reinterpret_cast<LPCWSTR>(od(L"GLM-5.2")));
+        AppendMenuW(m, MF_OWNERDRAW, 5, reinterpret_cast<LPCWSTR>(od(g_filter_model == "glm-5.2" ? L"Claude" : L"GLM-5.2")));
         AppendMenuW(m, MF_OWNERDRAW | MF_GRAYED,                  0, reinterpret_cast<LPCWSTR>(od(nullptr)));
+        AppendMenuW(m, MF_OWNERDRAW,                              6, reinterpret_cast<LPCWSTR>(od(L"Close")));
         AppendMenuW(m, MF_OWNERDRAW,                              2, reinterpret_cast<LPCWSTR>(od(L"Exit")));
         int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hw, nullptr);
         DestroyMenu(m);
         if (cmd == 1) start_load();
-        else if (cmd == 2) DestroyWindow(hw);
+        else if (cmd == 2) {
+            // Exit all: snapshot every running copy, then broadcast exit-all so
+            // every process (including self) closes without rewriting the state file.
+            save_state(hw, true);
+            { HWND h = nullptr; while ((h = FindWindowExW(nullptr, h, L"ClaudeUsageWidget", nullptr)) != nullptr)
+                PostMessageW(h, g_msg_exit_all, 0, 0); }
+        }
         else if (cmd == 3) open_info(hw);
         else if (cmd == 4) {
             g_simple = !g_simple;
@@ -1492,13 +1535,14 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             apply_mode(hw);
         }
         else if (cmd == 5) {
-            // Launch a fresh copy filtered to GLM-5.2, cascaded beside this one
-            // (the new process counts existing widgets for its px offset). The
-            // current instance is left untouched.
+            // Spawn the opposite-mode copy: Claude ↔ GLM-5.2.
             wchar_t exe[MAX_PATH]{};
             GetModuleFileNameW(nullptr, exe, MAX_PATH);
-            ShellExecuteW(nullptr, L"open", exe, L"--glm", nullptr, SW_SHOWNORMAL);
+            ShellExecuteW(nullptr, L"open", exe,
+                g_filter_model == "glm-5.2" ? L"--claude" : L"--glm",
+                nullptr, SW_SHOWNORMAL);
         }
+        else if (cmd == 6) DestroyWindow(hw);
         else if (cmd >= 100 && cmd <= 104) {
             g_opacity = levels[cmd - 100].alpha;
             apply_opacity(hw);
@@ -1507,10 +1551,27 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
 
-    case WM_DESTROY:
+    case WM_ENDSESSION:
+        if (wp) { // session is actually ending (not cancelled)
+            g_ending_session = true;
+            save_state(hw, true);
+        }
+        return 0;
+
+    case WM_DESTROY: {
         save_pos(hw);
+        if (!g_ending_session) {
+            // Count other ClaudeUsageWidget windows (excluding self).
+            int others = 0;
+            { HWND h = nullptr; while ((h = FindWindowExW(nullptr, h, L"ClaudeUsageWidget", nullptr)) != nullptr) if (h != hw) ++others; }
+            if (others > 0)
+                save_state(hw, false); // one copy closed intentionally; persist remaining layout
+            else
+                save_state(hw, true);  // last copy closed; save own pos for next launch
+        }
         PostQuitMessage(0);
         return 0;
+    }
 
     default:
         return DefWindowProcW(hw, msg, wp, lp);
@@ -1519,6 +1580,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR lpCmdLine, int) {
+    g_msg_exit_all = RegisterWindowMessageW(L"ClaudeUsageWidgetExitAll");
     InitializeCriticalSection(&g_cs);
     find_python(); // cache on main thread before background loads start
 
@@ -1544,44 +1606,108 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR lpCmdLine, int) {
     load_simple();
     load_model();
 
-    // A copy launched via the right-click "GLM-5.2" action passes --glm; force
-    // the filter on in memory without persisting (the shared model file stays
-    // untouched so ordinary launches remain unfiltered).
-    if (lpCmdLine && strstr(lpCmdLine, "--glm")) {
+    // ── Argument parsing ──────────────────────────────────────────────────────
+    // --glm         : existing behavior — force GLM-5.2 filter without persisting.
+    // --restore x y model : restore a saved copy at exact pos; model may be '-'.
+    // (Mutual exclusive; --restore takes priority.)
+    bool is_restore = false;
+    int  restore_x = 0, restore_y = 0;
+    std::vector<std::string> extra_state_lines; // additional copies to spawn at primary launch
+
+    if (lpCmdLine && strstr(lpCmdLine, "--restore")) {
+        char sm[64] = "-";
+        if (sscanf(strstr(lpCmdLine, "--restore"), "--restore %d %d %63s",
+                   &restore_x, &restore_y, sm) >= 2) {
+            is_restore = true;
+            g_filter_model = (strcmp(sm, "-") != 0) ? sm : "";
+            // Do NOT call save_model() — widget_model.txt stays as the shared preference.
+        }
+    } else if (lpCmdLine && strstr(lpCmdLine, "--glm")) {
         g_filter_model = "glm-5.2";
+    } else if (lpCmdLine && strstr(lpCmdLine, "--claude")) {
+        g_filter_model = ""; // force normal mode; skips widget_model.txt; has_args stays true → no restore
     }
 
     recompute_palette();   // pick default vs GLM palette based on filter state
 
+    // ── Window position ───────────────────────────────────────────────────────
     int px, py;
-    if (!load_pos(px, py))
-        px = GetSystemMetrics(SM_CXSCREEN) - WW - 20, py = 40;
+    if (is_restore) {
+        px = restore_x; py = restore_y;
+    } else {
+        if (!load_pos(px, py))
+            px = GetSystemMetrics(SM_CXSCREEN) - WW - 20, py = 40;
 
-    // Multi-instance: cascade each concurrently-running copy horizontally
-    // so multiple widgets don't stack on the exact same pixels. Count
-    // existing ClaudeUsageWidget top-level windows (prior instances only —
-    // this window is not created yet) and offset px by 72px (> SIMPLE_W) per prior
-    // instance. Vertical pos stays shared so all copies keep the same row.
-    {
-        int n = 0;
-        HWND hw = nullptr;
-        while ((hw = FindWindowExW(nullptr, hw, L"ClaudeUsageWidget", nullptr)) != nullptr)
-            ++n;
-        if (n > 0) {
-            px += n * 72;
+        // Count existing ClaudeUsageWidget windows (before this one is created).
+        int existing_n = 0;
+        { HWND h = nullptr; while ((h = FindWindowExW(nullptr, h, L"ClaudeUsageWidget", nullptr)) != nullptr) ++existing_n; }
+
+        // Primary launch: no args AND no existing copies → try widget_state.txt.
+        bool has_args = (lpCmdLine && lpCmdLine[0] != '\0');
+        bool state_restored = false;
+        if (!has_args && existing_n == 0) {
+            std::ifstream sf(state_path());
+            std::string line;
+            bool first = true;
+            while (std::getline(sf, line)) {
+                if (line.empty()) continue;
+                int sx = 0, sy = 0; char sm[64] = "-";
+                if (sscanf(line.c_str(), "%d %d %63s", &sx, &sy, sm) < 2) continue;
+                if (first) {
+                    px = sx; py = sy;
+                    g_filter_model = (strcmp(sm, "-") != 0) ? sm : "";
+                    recompute_palette(); // update palette for restored model
+                    state_restored = true;
+                    first = false;
+                } else {
+                    extra_state_lines.push_back(line);
+                }
+            }
+        }
+
+        // Multi-instance cascade: only when this is a manual extra copy launch
+        // (existing windows present and we are NOT restoring from state file).
+        if (!state_restored && existing_n > 0) {
+            px += existing_n * 72;
         }
     }
+
+    // ── Build window title (encodes active model filter for cross-process read) ──
+    // Title is invisible on WS_POPUP|TOOLWINDOW but queried by save_state() via
+    // GetWindowTextW to persist per-window filter alongside position.
+    std::wstring win_title = L"Claude Usage";
+    if (!g_filter_model.empty())
+        win_title += L"|" + std::wstring(g_filter_model.begin(), g_filter_model.end());
 
     // Create at the size matching the loaded mode. apply_mode (in WM_CREATE)
     // anchors the bottom edge, so creating at full height while g_simple would
     // push the Simple widget's top down by WH-SIMPLE_H each launch (accumulating
     // because WM_DESTROY saves the shifted position).
-    CreateWindowExW(
+    HWND hw = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
-        L"ClaudeUsageWidget", L"Claude Usage",
+        L"ClaudeUsageWidget", win_title.c_str(),
         WS_POPUP | WS_VISIBLE,
         px, py, g_simple ? SIMPLE_W : WW, g_simple ? SIMPLE_H : WH,
         nullptr, nullptr, hi, nullptr);
+
+    // Persist the full layout (this window + any already-running copies).
+    save_state(hw, true);
+
+    // Primary launch restoring a multi-copy layout: spawn one process per
+    // additional line from widget_state.txt with --restore so each opens at its
+    // saved position and model filter.
+    if (!extra_state_lines.empty()) {
+        wchar_t exe[MAX_PATH]{};
+        GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        for (const auto& ln : extra_state_lines) {
+            int sx = 0, sy = 0; char sm[64] = "-";
+            if (sscanf(ln.c_str(), "%d %d %63s", &sx, &sy, sm) < 2) continue;
+            std::wstring wsm(sm, sm + strlen(sm)); // ASCII model names: safe cast
+            wchar_t args[160]{};
+            swprintf(args, 160, L"--restore %d %d %ls", sx, sy, wsm.c_str());
+            ShellExecuteW(nullptr, L"open", exe, args, nullptr, SW_SHOWNORMAL);
+        }
+    }
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {
