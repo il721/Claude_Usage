@@ -6,23 +6,36 @@ const INTERVAL_MS = 1 * 60 * 1000;
 let cachedOrgId = null;
 
 async function fetchOrgId() {
-  // Try /api/organizations first (returns list of orgs)
+  // Resolve the org UUID from the cheapest reliable source first, falling back
+  // through progressively more expensive ones. Each source is tolerant of the
+  // several response shapes claude.ai has shipped over time.
+
+  // 1. lastActiveOrg cookie — set by claude.ai, no network, no shape guessing.
+  const c = document.cookie.match(/(?:^|;\s*)lastActiveOrg=([0-9a-fA-F-]{36})/);
+  if (c) return c[1];
+
+  // 2. /api/organizations — array, or wrapped in {organizations} / {data};
+  //    id field may be `uuid` or `id`.
   try {
     const r = await fetch('/api/organizations', { headers: { Accept: 'application/json' } });
     if (r.ok) {
       const data = await r.json();
-      const orgs = Array.isArray(data) ? data : (data.organizations ?? []);
-      if (orgs[0]?.uuid) return orgs[0].uuid;
+      const orgs = Array.isArray(data) ? data : (data.organizations ?? data.data ?? []);
+      if (orgs[0]) return orgs[0].uuid ?? orgs[0].id ?? null;
     }
   } catch (_) {}
-  // Fall back to /api/account
+
+  // 3. /api/account — org lives under memberships[0].organization.
   try {
     const r = await fetch('/api/account', { headers: { Accept: 'application/json' } });
     if (r.ok) {
       const data = await r.json();
-      return data?.memberships?.[0]?.organization?.uuid ?? null;
+      const m = data?.memberships ?? data?.account?.memberships;
+      const org = m?.[0]?.organization;
+      if (org) return org.uuid ?? org.id ?? null;
     }
   } catch (_) {}
+
   return null;
 }
 
