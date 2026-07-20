@@ -2,10 +2,11 @@
 Query z.ai GLM Coding Plan quota and print '<5h_pct>|<week_pct>|<reset5h>|<resetweek>'
 as bare integers (no '%') plus formatted local reset times. The z.ai quota endpoint
 returns data.limits[]; TOKENS_LIMIT entries each carry a direct `percentage` and a
-`nextResetTime` (epoch ms). The 5-hour window resets sooner than the weekly window,
-so sorting by nextResetTime ascending gives 5h first, weekly last. Reset-time format
-mirrors get_limits.py for 5h ("HH:MM", 24h); weekly is a countdown ("d:hh:mm"). On any failure
-prints nothing (the widget then shows '--' / blank).
+`nextResetTime` (epoch ms), plus a `number` that identifies the window: number==5 is
+the 5-hour window, number==1 is the weekly (1 week) window. Identity comes from `number`,
+not reset time — weekly can reset sooner than 5-hour, so sorting by nextResetTime would
+swap them. Reset-time format mirrors get_limits.py for 5h ("HH:MM", 24h); weekly is a
+countdown ("d:hh:mm"). On any failure prints nothing (the widget then shows '--' / blank).
 
 API key (first found wins):
   env ZAI_API_KEY | GLM_API_KEY | ANTHROPIC_AUTH_TOKEN
@@ -77,21 +78,24 @@ def main():
         limits = (json.loads(body).get("data") or {}).get("limits") or []
     except Exception:
         return
-    toks = []
+    five = week = None   # (reset, pct) — identified by window `number`, NOT reset time
     for l in limits:
         if l.get("type") != "TOKENS_LIMIT":
             continue
         try:
-            pct = int(round(float(l.get("percentage") or 0)))
+            pct   = int(round(float(l.get("percentage") or 0)))
             reset = int(l.get("nextResetTime") or 0)
+            num   = int(l.get("number") or 0)
         except Exception:
             continue
-        toks.append((reset, pct))
-    if not toks:
+        if num == 5:        # 5-hour window
+            five = (reset, pct)
+        elif num == 1:      # weekly window (1 week)
+            week = (reset, pct)
+    if five is None or week is None:
         return
-    toks.sort(key=lambda t: t[0])           # earliest reset first = 5h; latest = weekly
-    r5, p5 = toks[0]
-    rw, pw = toks[-1]
+    r5, p5 = five
+    rw, pw = week
     print(f"{p5}|{pw}|{_fmt_time(r5)}|{_countdown(rw)}")
 
 if __name__ == "__main__":
