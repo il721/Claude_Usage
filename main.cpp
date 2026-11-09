@@ -107,6 +107,7 @@ static POINT            g_drag0, g_win0;
 static bool             g_dragging = false;
 static BYTE             g_opacity  = 255;            // 0=invisible, 255=opaque
 static bool             g_simple   = false;           // compact two-cell display
+static bool             g_frozen   = false;           // drag disabled, clicks still work
 // When non-empty, the info window's charts are filtered to this one model
 // (e.g. "glm-5.2"). Empty = show all models aggregated, as before.
 static std::string      g_filter_model;
@@ -256,6 +257,23 @@ static void save_simple() {
 static void load_simple() {
     std::ifstream f(simple_path());
     int v; if (f && (f >> v)) g_simple = (v != 0);
+}
+
+// ─── Freeze-move persistence ─────────────────────────────────────────────────
+static std::filesystem::path frozen_path() {
+    wchar_t prof[MAX_PATH]{};
+    GetEnvironmentVariableW(L"USERPROFILE", prof, MAX_PATH);
+    return std::filesystem::path(std::wstring(prof)) / L".claude" / L"widget_frozen.txt";
+}
+
+static void save_frozen() {
+    std::ofstream f(frozen_path());
+    if (f) f << (g_frozen ? 1 : 0) << '\n';
+}
+
+static void load_frozen() {
+    std::ifstream f(frozen_path());
+    int v; if (f && (f >> v)) g_frozen = (v != 0);
 }
 
 // ─── Model-filter persistence ────────────────────────────────────────────────
@@ -605,7 +623,9 @@ static void load_extension(Metrics& m) {
 
     double sp = to_double(trim(p[0]));
     double wp = to_double(trim(p[2]));
-    if (sp == 0 && wp == 0) return;
+    // A genuine 0%/0% from the API is valid data (low usage), not "missing".
+    // Only bail when there's no reset timestamp — that signals an absent payload.
+    if (trim(p[1]).empty() && trim(p[3]).empty()) return;
 
     wchar_t pbuf[16];
 
@@ -1412,6 +1432,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONDOWN:
         if (g_alert_state) dismiss_alerts();   // touch/click acknowledges alerts
+        if (g_frozen) return 0;
         SetCapture(hw); g_dragging = true;
         g_drag0 = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         { RECT wr; GetWindowRect(hw, &wr); g_win0 = { wr.left, wr.top }; }
@@ -1514,6 +1535,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         AppendMenuW(m, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)op,       reinterpret_cast<LPCWSTR>(od(L"Opacity", true)));
         AppendMenuW(m, MF_OWNERDRAW,                              3, reinterpret_cast<LPCWSTR>(od(L"More info...")));
         AppendMenuW(m, MF_OWNERDRAW | (g_simple ? MF_CHECKED : 0), 4, reinterpret_cast<LPCWSTR>(od(L"Simple mode")));
+        AppendMenuW(m, MF_OWNERDRAW | (g_frozen ? MF_CHECKED : 0), 7, reinterpret_cast<LPCWSTR>(od(L"Freeze move")));
         AppendMenuW(m, MF_OWNERDRAW, 5, reinterpret_cast<LPCWSTR>(od(g_filter_model == "glm-5.2" ? L"Claude" : L"GLM-5.2")));
         AppendMenuW(m, MF_OWNERDRAW | MF_GRAYED,                  0, reinterpret_cast<LPCWSTR>(od(nullptr)));
         AppendMenuW(m, MF_OWNERDRAW,                              6, reinterpret_cast<LPCWSTR>(od(L"Close")));
@@ -1534,6 +1556,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             save_simple();
             apply_mode(hw);
         }
+        else if (cmd == 7) { g_frozen = !g_frozen; save_frozen(); }
         else if (cmd == 5) {
             // Spawn the opposite-mode copy: Claude ↔ GLM-5.2.
             wchar_t exe[MAX_PATH]{};
@@ -1604,6 +1627,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR lpCmdLine, int) {
 
     load_opacity();
     load_simple();
+    load_frozen();
     load_model();
 
     // ── Argument parsing ──────────────────────────────────────────────────────

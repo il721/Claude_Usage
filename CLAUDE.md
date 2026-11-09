@@ -4,7 +4,7 @@ Win32 desktop widget (C++/WinAPI) that shows Claude API usage from claude.ai.
 
 ## Build & run
 
-Use `/clion-cpp` — it handles the MinGW PATH fix, compiler flags, and detached launch.
+Use `/il-clion-cpp` — it handles the MinGW PATH fix, compiler flags, and detached launch.
 
 ## Distribution
 
